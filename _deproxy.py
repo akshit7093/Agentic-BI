@@ -40,16 +40,19 @@ def deproxy_stdio():
 
 def safe_print(*args, **kwargs):
     """
-    Print that NEVER goes through Rich's FileProxy.
-
-    Uses sys.__stdout__ which Python preserves as the original stdout
-    from interpreter startup — Rich cannot touch it.
-    Falls back to sys.stdout if __stdout__ is unavailable.
+    Print that safely bypasses Rich's FileProxy but STILL goes to Jupyter/Databricks cell output.
     """
-    # sys.__stdout__ is the original stdout saved by the Python interpreter
-    # at startup. Rich's FileProxy can replace sys.stdout but cannot
-    # replace sys.__stdout__.
-    out = getattr(sys, '__stdout__', None) or sys.stdout
+    out = sys.stdout
+    
+    # If sys.stdout is currently Rich's FileProxy, extract the real underlying file 
+    # (e.g. Jupyter's OutStream) to avoid recursion, while still printing to the frontend.
+    cls_name = type(out).__name__
+    cls_module = getattr(type(out), '__module__', '')
+    if cls_name == 'FileProxy' and 'rich' in cls_module:
+        original = getattr(out, '_FileProxy__file', None)
+        if original is not None:
+            out = original
+            
     kwargs['file'] = out
     kwargs.setdefault('flush', True)
     print(*args, **kwargs)
