@@ -19,7 +19,6 @@ from langchain_core.messages import (
 )
 from langchain_core.tools import StructuredTool
 from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolNode
 from typing_extensions import TypedDict, Annotated
 from langgraph.graph.message import add_messages
 
@@ -110,7 +109,10 @@ def _run_react_subagent(
     logger.info(f"[{agent_name}] Starting sub-agent for task: {user_task[:80]}")
 
     llm_with_tools = llm.bind_tools(tools)
-    tool_node = ToolNode(tools)
+    tool_map = {t.name: t for t in tools}
+
+    # Import robust parsers from workflows
+    from ..workflows.nodes import _extract_tool_calls, _has_tool_calls
 
     def generate_code(state: _SubState) -> Dict:
         retries = state.get("retries", 0)
@@ -125,10 +127,10 @@ def _run_react_subagent(
 
         try:
             response = llm_with_tools.invoke(history)
-            tool_calls = getattr(response, "tool_calls", None)
+            calls = _extract_tool_calls(response)
             logger.info(
                 f"[{agent_name}] LLM responded: "
-                f"{'tool_calls=' + str(len(tool_calls)) if tool_calls else 'text response'}"
+                f"{'tool_calls=' + str(len(calls)) if calls else 'text response'}"
             )
             return {"messages": [response], "retries": retries}
         except Exception as exc:
@@ -138,22 +140,37 @@ def _run_react_subagent(
 
     def execute_tools(state: _SubState) -> Dict:
         """Run tool calls and catch errors, re-inject as validation feedback."""
-        logger.debug(f"[{agent_name}] Executing tool calls")
-        try:
-            result = tool_node.invoke(state)
-            # Check if any tool result is an error string
-            new_msgs = result.get("messages", [])
-            for msg in new_msgs:
-                if isinstance(msg, ToolMessage) and "Error" in str(msg.content):
-                    logger.warning(f"[{agent_name}] Tool error detected: {str(msg.content)[:200]}")
-            return {**result, "retries": state.get("retries", 0) + 1}
-        except Exception as exc:
-            logger.error(f"[{agent_name}] Tool execution failed: {exc}")
-            err_msg = ToolMessage(
-                content=f"Tool execution error: {exc}. Please try a different approach.",
-                tool_call_id="error",
-            )
-            return {"messages": [err_msg], "retries": state.get("retries", 0) + 1}
+        last_msg = state["messages"][-1]
+        calls = _extract_tool_calls(last_msg)
+        
+        logger.debug(f"[{agent_name}] Executing {len(calls)} tool calls")
+        results = []
+        has_error = False
+        
+        for call in calls:
+            name = call["name"]
+            args = call["args"]
+            call_id = call["id"]
+            
+            if name not in tool_map:
+                msg = ToolMessage(content=f"Error: Unknown tool '{name}'", tool_call_id=call_id, name=name)
+                results.append(msg)
+                has_error = True
+                continue
+                
+            try:
+                tool_obj = tool_map[name]
+                out = tool_obj.invoke(args)
+                results.append(ToolMessage(content=str(out), tool_call_id=call_id, name=name))
+            except Exception as exc:
+                logger.error(f"[{agent_name}] Tool {name} execution failed: {exc}")
+                msg = ToolMessage(content=f"Error executing {name}: {exc}. Try another method.", tool_call_id=call_id, name=name)
+                results.append(msg)
+                has_error = True
+
+        if has_error:
+            return {"messages": results, "retries": state.get("retries", 0) + 1}
+        return {"messages": results, "retries": state.get("retries", 0)}
 
     def should_continue(state: _SubState) -> str:
         last = state["messages"][-1]
@@ -163,8 +180,7 @@ def _run_react_subagent(
             logger.info(f"[{agent_name}] Routing → END (max retries)")
             return "end"
 
-        has_tool_calls = bool(getattr(last, "tool_calls", None))
-        route = "continue" if has_tool_calls else "end"
+        route = "continue" if _has_tool_calls(last) else "end"
         logger.debug(f"[{agent_name}] Routing → {route}")
         return route
 
@@ -200,7 +216,7 @@ def _run_react_subagent(
             if msgs:
                 last = msgs[-1]
                 if isinstance(last, AIMessage) and last.content:
-                    if not getattr(last, "tool_calls", None):
+                    if not _has_tool_calls(last):
                         final_response = str(last.content)
                         logger.info(f"[{agent_name}] Final response captured ({len(final_response)} chars)")
 
@@ -228,6 +244,7 @@ BEHAVIOR:
 - For SQL-style analysis on large data, use duckdb_query.
 - Always return a clear, structured answer.
 - If a tool fails, try a different approach — use python_repl_ast as the fallback.
+- **CRITICAL**: You MUST use the provided tool-calling schema/API to execute these tools. DO NOT just type `inspect_data()` as text. Use the actual tool call payload!
 """
 
 
@@ -351,6 +368,7 @@ BEHAVIOR:
 - After each tool, interpret the result in the context of the overall task.
 - At the end, synthesize a consensus ranking across all methods.
 - Present numbered findings with actual values from the tool outputs.
+- **CRITICAL**: You MUST use the provided tool-calling schema/API to execute these tools. DO NOT just type the tool name as text. Use the actual tool call payload!
 """
 
 
@@ -417,6 +435,7 @@ BEHAVIOR:
 - For visualization: generate appropriate charts based on the task.
 - Always interpret results — don't just return raw numbers.
 - Generate charts proactively when doing analysis.
+- **CRITICAL**: You MUST use the provided tool-calling schema/API to execute these tools. DO NOT just type the tool name as text. Use the actual tool call payload!
 """
 
 
