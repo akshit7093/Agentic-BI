@@ -151,8 +151,8 @@ code: |
   def tool_fn(column, threshold=0.5):
       import json
       result = df[column].pipe(lambda s: (s > threshold).sum())
-      return json.dumps({"count_above": int(result), "threshold": threshold})
-params: {"column": "str", "threshold": "float"}
+      return json.dumps({{"count_above": int(result), "threshold": threshold}})
+params: {{"column": "str", "threshold": "float"}}
 ```
 
 ---
