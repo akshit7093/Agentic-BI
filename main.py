@@ -5,14 +5,27 @@
 import json
 import logging
 import os
+import sys
 import traceback
 import uuid
 from typing import Any, Dict, Optional
+
+# ── Fix Rich + Databricks/Jupyter infinite recursion ──────────
+# Rich installs a FileProxy on sys.stdout at import time.
+# In Jupyter, this creates: stdout.flush → Rich console.print
+# → ipython_display → stdout.flush → ∞ recursion.
+# Fix: save original stdout, import Rich, then restore it.
+_original_stdout = sys.stdout
+_original_stderr = sys.stderr
 
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
+
+# Restore original stdout/stderr to remove Rich's FileProxy
+sys.stdout = _original_stdout
+sys.stderr = _original_stderr
 
 from .core.mmm_engine import MMMEngine
 from .workflows.state import initial_state, Phase
@@ -31,7 +44,7 @@ except ImportError:
     SPARK_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
-console = Console(force_terminal=True)
+console = Console(force_terminal=True, file=_original_stdout)
 
 
 # =============================================================
