@@ -106,76 +106,21 @@ def _summarise_args(args: Dict[str, Any]) -> str:
         parts.append(f"{k}={sv[:40]!r}" if len(sv) > 40 else f"{k}={v!r}")
     return ", ".join(parts)
 
-import re as _re
-from .._deproxy import safe_print as _safe_print
-
-def _strip_rich_tags(text: str) -> str:
-    """Remove Rich markup tags like [bold red]...[/bold red] for plain output."""
-    return _re.sub(r'\[/?[a-zA-Z_ ]+\]', '', text)
-
 
 def _log_message(console: Optional[Any], msg: str, level: str = "info") -> None:
     """
     Standardized logging function.
-    Uses safe_print() which writes to sys.__stdout__ to avoid
-    Rich FileProxy recursion in Databricks/Jupyter.
+    Logs to both console (if available) and Python logger.
     """
-    _safe_print(_strip_rich_tags(msg))
+    if console:
+        console.print(msg)
     log_func = getattr(logger, level, logger.info)
-    log_func(_strip_rich_tags(msg))
-
-
-# Max characters for a single tool response stored in history.
-# Keeps individual messages from being enormous; the agent can always
-# re-call a tool if it needs the full output.
-MAX_TOOL_CONTENT_CHARS = 2_000
-
-# Total character budget for the messages list sent to the LLM.
-# Llama-4-Maverick has a 131,072-token window; ~4 chars/token → ~524k chars.
-# Use a conservative 300k to leave room for the system prompt + tool schemas.
-MAX_CONTEXT_CHARS = 300_000
-
-
-def _truncate_tool_content(content: str, max_chars: int = MAX_TOOL_CONTENT_CHARS) -> str:
-    """Trim a tool response to max_chars, appending a truncation marker."""
-    if len(content) <= max_chars:
-        return content
-    return content[:max_chars] + "… [truncated]"
+    log_func(msg)
 
 
 def _truncate_messages(messages: List[BaseMessage], max_count: int = MAX_MESSAGES_KEEP) -> List[BaseMessage]:
     """Keep only the most recent messages to prevent memory issues."""
     return list(messages)[-max_count:] if len(messages) > max_count else list(messages)
-
-
-def _trim_messages_to_context_limit(
-    messages: List[BaseMessage],
-    max_chars: int = MAX_CONTEXT_CHARS,
-) -> List[BaseMessage]:
-    """
-    Trim the messages list so that the *total character count* of all message
-    contents stays within `max_chars`.
-
-    Strategy: always keep the NEWEST messages; drop oldest ones first.
-    We never drop the very first HumanMessage (the user's request).
-    """
-    if not messages:
-        return messages
-
-    # Walk newest → oldest accumulating sizes
-    total = 0
-    keep_from = len(messages)  # index of oldest message to keep
-    for i in range(len(messages) - 1, -1, -1):
-        content = getattr(messages[i], "content", "") or ""
-        if isinstance(content, list):
-            content = " ".join(str(c) for c in content)
-        total += len(content)
-        if total > max_chars:
-            keep_from = i + 1  # drop everything before this
-            break
-        keep_from = i
-
-    return list(messages[keep_from:])
 
 
 def _validate_tool_exists(registry: ToolRegistry, tool_name: str) -> Tuple[bool, str]:
@@ -397,10 +342,7 @@ def build_agent_node(llm_with_tools, system_message_fn, console=None):
             }
 
         sys_msg = system_message_fn(state)
-        # Apply context-window trim BEFORE sending to LLM.
-        # This prevents "decoder prompt too long" 400 errors.
-        history_trimmed = _trim_messages_to_context_limit(list(state["messages"]))
-        messages = [sys_msg] + history_trimmed
+        messages = [sys_msg] + list(state["messages"])
 
         try:
             response: AIMessage = llm_with_tools.invoke(messages)
@@ -561,8 +503,6 @@ def build_tool_node(registry: ToolRegistry, console=None):
                 continue
 
             result_str = registry.invoke(name, args)
-            # Truncate large tool responses before storing in history.
-            result_str = _truncate_tool_content(result_str)
 
             # Parse result for context updates and phase transitions
             try:
