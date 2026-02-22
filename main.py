@@ -183,16 +183,35 @@ class NotebookMMM:
         }
 
         final_response: Optional[str] = None
-        step_count = 0
+        tool_call_count = 0
+        # Intent-based limits: set after planner runs
+        # Default high limit; planner output refines it
+        max_tool_calls = 50  # default for analysis
 
         with console.status("[bold green]Agent working…[/bold green]"):
             try:
                 for event in self._graph.stream(input_state, config):
-                    step_count += 1
-                    if step_count > 25:
-                        console.print("[yellow]⚠ Safety limit: max steps reached[/yellow]")
-                        break
                     for node_name, node_data in event.items():
+
+                        # After planner runs, set intent-based tool limit
+                        if node_name == "planner" and "plan" in node_data:
+                            intent = node_data["plan"].get("intent", "analysis")
+                            max_tool_calls = {
+                                "simple": 5,
+                                "data_query": 15,
+                                "analysis": 50,
+                            }.get(intent, 50)
+
+                        # Count only actual tool executions
+                        if node_name == "tools":
+                            tool_call_count += 1
+                            if tool_call_count > max_tool_calls:
+                                console.print(
+                                    f"[yellow]⚠ Safety limit: {max_tool_calls} "
+                                    f"tool calls reached for intent '{intent}'[/yellow]"
+                                )
+                                break
+
                         if node_name == "agent" and "messages" in node_data:
                             msgs = node_data["messages"]
                             if msgs:
@@ -201,6 +220,9 @@ class NotebookMMM:
                                     tc = getattr(msg, "tool_calls", None)
                                     if not tc:
                                         final_response = str(msg.content)
+                    else:
+                        continue  # inner loop didn't break
+                    break  # inner loop broke → stop outer loop too
             except Exception as exc:
                 traceback.print_exc()
                 final_response = f"⚠ Agent error: {exc}"

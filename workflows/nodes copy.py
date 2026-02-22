@@ -6,11 +6,10 @@
 
 import json
 import logging
-import re
 import traceback
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
@@ -21,15 +20,6 @@ from .state import (
 )
 from ..tools.registry import ToolRegistry
 
-# ─────────────────────────────────────────────
-# CONFIGURATION CONSTANTS (was hardcoded magic numbers)
-# ─────────────────────────────────────────────
-MAX_ITERATIONS = 40
-MAX_MESSAGES_KEEP = 50
-MAX_RETRIES = 3
-REFLECTION_MESSAGE_WINDOW = 15
-QUALITY_GATE_RETRY_THRESHOLD = 35
-
 logger = logging.getLogger(__name__)
 
 
@@ -39,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 def _extract_tool_calls(message: BaseMessage) -> List[Dict[str, Any]]:
     """Extract tool calls from an AIMessage regardless of SDK version."""
-    calls: List[Dict[str, Any]] = []
+    calls = []
     if not isinstance(message, AIMessage):
         return calls
     raw = getattr(message, "tool_calls", None) or []
@@ -66,18 +56,15 @@ def _extract_tool_calls(message: BaseMessage) -> List[Dict[str, Any]]:
 
 
 def _has_tool_calls(message: BaseMessage) -> bool:
-    """Check if a message contains tool calls."""
     return bool(_extract_tool_calls(message))
 
 
 def _parse_json_from_response(content: str) -> Dict[str, Any]:
     """
     Extract the first JSON object from LLM text output.
-    Handles ```json fences and raw JSON with improved robustness.
+    Handles ```json fences and raw JSON.
     """
-    if not content or not isinstance(content, str):
-        return {}
-    
+    import re
     # Try fenced JSON block first
     m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
     if m:
@@ -85,57 +72,29 @@ def _parse_json_from_response(content: str) -> Dict[str, Any]:
             return json.loads(m.group(1))
         except Exception:
             pass
-    
-    # Try to find any JSON object with better nesting support
-    start = content.find("{")
-    end = content.rfind("}") + 1
-    if start != -1 and end > start:
+    # Try raw JSON
+    m = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", content, re.DOTALL)
+    if m:
         try:
-            return json.loads(content[start:end])
+            return json.loads(m.group(0))
         except Exception:
             pass
-    
     return {}
 
 
 def _summarise_args(args: Dict[str, Any]) -> str:
-    """Create a compact string representation of tool arguments."""
-    parts: List[str] = []
+    parts = []
     for k, v in args.items():
         sv = str(v)
         parts.append(f"{k}={sv[:40]!r}" if len(sv) > 40 else f"{k}={v!r}")
     return ", ".join(parts)
 
 
-def _log_message(console: Optional[Any], msg: str, level: str = "info") -> None:
-    """
-    Standardized logging function.
-    Logs to both console (if available) and Python logger.
-    """
-    if console:
-        console.print(msg)
-    log_func = getattr(logger, level, logger.info)
-    log_func(msg)
-
-
-def _truncate_messages(messages: List[BaseMessage], max_count: int = MAX_MESSAGES_KEEP) -> List[BaseMessage]:
-    """Keep only the most recent messages to prevent memory issues."""
-    return list(messages)[-max_count:] if len(messages) > max_count else list(messages)
-
-
-def _validate_tool_exists(registry: ToolRegistry, tool_name: str) -> Tuple[bool, str]:
-    """Check if a tool exists in the registry."""
-    available_tools = {t["name"] for t in registry.list_tools()}
-    if tool_name in available_tools:
-        return True, ""
-    return False, f"Unknown tool: {tool_name}. Available: {', '.join(sorted(available_tools))}"
-
-
 # ─────────────────────────────────────────────
 # 1. PLANNER NODE
 # ─────────────────────────────────────────────
 
-def build_planner_node(llm, system_message_fn, registry=None, console=None):
+def build_planner_node(llm, system_message_fn, registry=None):
     """
     Creates a step-by-step plan for the current phase.
     The planner receives phase context, available tools, and any
@@ -149,13 +108,9 @@ def build_planner_node(llm, system_message_fn, registry=None, console=None):
         from langchain_core.messages import SystemMessage
 
         phase = state.get("phase", Phase.IDLE.value)
-        ctx = dict(state.get("context", {}))
-        reflection = state.get("reflection", empty_reflection())
+        ctx = state.get("context", {})
+        reflection = state.get("reflection", {})
         iteration = state.get("iteration", 0)
-        plan = state.get("plan", empty_plan())
-        error_recovery = state.get("error_recovery", empty_error_recovery())
-        quality_scores = dict(state.get("quality_scores", {}))
-        phase_results = dict(state.get("phase_results", {}))
 
         # ── Build available tools list from registry ──
         available_tools_block = ""
@@ -242,58 +197,40 @@ Only use tools from the AVAILABLE TOOLS list above.
 
             intent = parsed.get("intent", "analysis")
 
-            new_plan = {
+            plan = {
                 "goal": parsed.get("goal", f"Complete {phase} phase"),
                 "current_phase": phase,
                 "intent": intent,
                 "steps": parsed.get("steps", []),
                 "success_criteria": parsed.get("success_criteria", []),
                 "current_step_idx": 0,
-                "revision_count": plan.get("revision_count", 0) + (
+                "revision_count": state.get("plan", {}).get("revision_count", 0) + (
                     1 if reflection.get("decision") == "retry" else 0
                 ),
             }
 
-            logger.info(f"[PLANNER] Phase={phase}, Intent={intent}, Steps={len(new_plan['steps'])}, Goal={new_plan['goal'][:80]}")
+            logger.info(f"[PLANNER] Phase={phase}, Intent={intent}, Steps={len(plan['steps'])}, Goal={plan['goal'][:80]}")
 
-            plan_summary = f"📋 **Plan** ({intent}): {new_plan['goal']}\n"
-            for i, step in enumerate(new_plan.get("steps", []), 1):
+            plan_summary = f"📋 **Plan** ({intent}): {plan['goal']}\n"
+            for i, step in enumerate(plan.get("steps", []), 1):
                 plan_summary += f"  {i}. {step.get('action', '?')} → `{step.get('tool', '?')}`\n"
 
             plan_msg = AIMessage(content=plan_summary)
 
-            # Increment iteration consistently
-            new_iteration = iteration + 1
-
             return {
-                "messages": _truncate_messages(state.get("messages", []) + [plan_msg]),
+                "messages": [plan_msg],
                 "next_step": "agent",
-                "phase": phase,
-                "context": ctx,
-                "plan": new_plan,
-                "reflection": reflection,
-                "error_recovery": error_recovery,
-                "quality_scores": quality_scores,
-                "phase_results": phase_results,
-                "iteration": new_iteration,
+                "plan": plan,
+                "iteration": iteration,
             }
 
         except Exception as exc:
             logger.warning(f"[PLANNER] Failed: {exc}, falling back to agent")
-            _log_message(console, f"[yellow]⚠ Planner failed: {exc}[/yellow]", "warning")
-            
-            new_iteration = iteration + 1
             return {
-                "messages": _truncate_messages(state.get("messages", [])),
+                "messages": [],
                 "next_step": "agent",
-                "phase": phase,
-                "context": ctx,
                 "plan": empty_plan(),
-                "reflection": reflection,
-                "error_recovery": error_recovery,
-                "quality_scores": quality_scores,
-                "phase_results": phase_results,
-                "iteration": new_iteration,
+                "iteration": iteration,
             }
 
     return planner_node
@@ -303,7 +240,7 @@ Only use tools from the AVAILABLE TOOLS list above.
 # 2. AGENT NODE (enhanced with error recovery)
 # ─────────────────────────────────────────────
 
-def build_agent_node(llm_with_tools, system_message_fn, console=None):
+def build_agent_node(llm_with_tools, system_message_fn):
     """
     Factory: returns a node function that calls the LLM.
     Enhanced with adaptive error recovery and plan awareness.
@@ -313,31 +250,18 @@ def build_agent_node(llm_with_tools, system_message_fn, console=None):
         from langchain_core.messages import SystemMessage
 
         iteration = state.get("iteration", 0)
-        error_recovery = dict(state.get("error_recovery", empty_error_recovery()))
-        phase = state.get("phase", Phase.IDLE.value)
-        ctx = dict(state.get("context", {}))
-        plan = state.get("plan", empty_plan())
-        reflection = state.get("reflection", empty_reflection())
-        quality_scores = dict(state.get("quality_scores", {}))
-        phase_results = dict(state.get("phase_results", {}))
+        error_state = state.get("error_recovery", empty_error_recovery())
 
         # Safety: max iterations
-        if iteration >= MAX_ITERATIONS:
-            logger.warning(f"[AGENT] Max iterations ({MAX_ITERATIONS}) reached — stopping")
-            _log_message(console, f"[yellow]⚠ Max iterations ({MAX_ITERATIONS}) reached[/yellow]", "warning")
+        max_iter = 40
+        if iteration >= max_iter:
+            logger.warning(f"[AGENT] Max iterations ({max_iter}) reached — stopping")
             err_msg = AIMessage(
                 content="⚠️ Maximum iteration limit reached. Routing to reflection for assessment."
             )
             return {
-                "messages": _truncate_messages(state.get("messages", []) + [err_msg]),
+                "messages": [err_msg],
                 "next_step": "reflect",
-                "phase": phase,
-                "context": ctx,
-                "plan": plan,
-                "reflection": reflection,
-                "error_recovery": error_recovery,
-                "quality_scores": quality_scores,
-                "phase_results": phase_results,
                 "iteration": iteration + 1,
             }
 
@@ -348,55 +272,42 @@ def build_agent_node(llm_with_tools, system_message_fn, console=None):
             response: AIMessage = llm_with_tools.invoke(messages)
 
             # Reset error recovery on success
-            error_recovery = {
-                **error_recovery,
+            error_state = {
+                **error_state,
                 "consecutive_failures": 0,
                 "alternative_tried": False,
             }
 
         except Exception as exc:
             logger.exception("LLM invoke failed")
-            _log_message(console, f"[red]❌ LLM invoke failed: {exc}[/red]", "error")
 
-            error_recovery["consecutive_failures"] = error_recovery.get("consecutive_failures", 0) + 1
-            error_recovery["retry_count"] = error_recovery.get("retry_count", 0) + 1
+            error_state["consecutive_failures"] = error_state.get("consecutive_failures", 0) + 1
+            error_state["retry_count"] = error_state.get("retry_count", 0) + 1
 
-            if error_recovery["consecutive_failures"] <= error_recovery.get("max_retries", MAX_RETRIES):
+            if error_state["consecutive_failures"] <= error_state.get("max_retries", 3):
                 # Retry: inject error context and try again
-                logger.info(f"[AGENT] Error recovery attempt {error_recovery['consecutive_failures']}")
+                logger.info(f"[AGENT] Error recovery attempt {error_state['consecutive_failures']}")
                 err_msg = AIMessage(
-                    content=f"⚠️ LLM error (attempt {error_recovery['consecutive_failures']}): {exc}. "
+                    content=f"⚠️ LLM error (attempt {error_state['consecutive_failures']}): {exc}. "
                             f"I will try a different approach."
                 )
                 return {
-                    "messages": _truncate_messages(state.get("messages", []) + [err_msg]),
+                    "messages": [err_msg],
                     "next_step": "agent",  # retry
-                    "phase": phase,
-                    "context": ctx,
-                    "plan": plan,
-                    "reflection": reflection,
-                    "error_recovery": error_recovery,
-                    "quality_scores": quality_scores,
-                    "phase_results": phase_results,
                     "iteration": iteration + 1,
+                    "error_recovery": error_state,
                 }
             else:
                 # Give up — route to reflection
                 err_msg = AIMessage(
-                    content=f"⚠️ Repeated failures after {error_recovery['retry_count']} attempts. "
+                    content=f"⚠️ Repeated failures after {error_state['retry_count']} attempts. "
                             f"Routing to reflection for assessment."
                 )
                 return {
-                    "messages": _truncate_messages(state.get("messages", []) + [err_msg]),
+                    "messages": [err_msg],
                     "next_step": "reflect",
-                    "phase": phase,
-                    "context": ctx,
-                    "plan": plan,
-                    "reflection": reflection,
-                    "error_recovery": error_recovery,
-                    "quality_scores": quality_scores,
-                    "phase_results": phase_results,
                     "iteration": iteration + 1,
+                    "error_recovery": error_state,
                 }
 
         has_calls = _has_tool_calls(response)
@@ -406,7 +317,7 @@ def build_agent_node(llm_with_tools, system_message_fn, console=None):
             next_step = "tools"
         else:
             # No tool calls → agent is done acting
-            plan_intent = plan.get("intent", "analysis")
+            plan_intent = state.get("plan", {}).get("intent", "analysis")
             if plan_intent in ("simple", "data_query"):
                 # For simple/data queries, respond and finish — no need for
                 # full reflection + quality gate cycle
@@ -415,20 +326,11 @@ def build_agent_node(llm_with_tools, system_message_fn, console=None):
                 # For full analysis, route to reflection for quality assessment
                 next_step = "reflect"
 
-        # Increment iteration consistently
-        new_iteration = iteration + 1
-
         return {
-            "messages": _truncate_messages(state.get("messages", []) + [response]),
+            "messages": [response],
             "next_step": next_step,
-            "phase": phase,
-            "context": ctx,
-            "plan": plan,
-            "reflection": reflection,
-            "error_recovery": error_recovery,
-            "quality_scores": quality_scores,
-            "phase_results": phase_results,
-            "iteration": new_iteration,
+            "iteration": iteration + 1,
+            "error_recovery": error_state,
         }
 
     return agent_node
@@ -444,74 +346,36 @@ def build_tool_node(registry: ToolRegistry, console=None):
     Enhanced with automatic context extraction from tool results.
     """
 
+    def _log(msg: str, style: str = "cyan") -> None:
+        if console:
+            console.print(f"[{style}]{msg}[/{style}]")
+        else:
+            logger.info(msg)
+
     def tool_node(state: AgentState) -> Dict[str, Any]:
         last_message = state["messages"][-1]
         tool_calls = _extract_tool_calls(last_message)
 
-        phase = state.get("phase", Phase.IDLE.value)
-        ctx = dict(state.get("context", {}))
-        error_recovery = dict(state.get("error_recovery", empty_error_recovery()))
-        plan = state.get("plan", empty_plan())
-        reflection = state.get("reflection", empty_reflection())
-        quality_scores = dict(state.get("quality_scores", {}))
-        phase_results = dict(state.get("phase_results", {}))
-        iteration = state.get("iteration", 0)
-
         if not tool_calls:
-            # ✅ FIX: Preserve all state even when no tool calls
-            return {
-                "messages": _truncate_messages(state.get("messages", [])),
-                "next_step": "agent",
-                "phase": phase,
-                "context": ctx,
-                "plan": plan,
-                "reflection": reflection,
-                "error_recovery": error_recovery,
-                "quality_scores": quality_scores,
-                "phase_results": phase_results,
-                "iteration": iteration + 1,
-            }
+            return {"messages": [], "next_step": "agent"}
 
         tool_results: List[ToolMessage] = []
+        phase = state.get("phase", Phase.IDLE.value)
+        ctx = dict(state.get("context", {}))
+        error_state = dict(state.get("error_recovery", empty_error_recovery()))
 
         for call in tool_calls:
             name = call["name"]
             args = call["args"]
             call_id = call["id"]
 
-            _log_message(console, f"  ⚙  {name}({_summarise_args(args)})", "info")
-
-            # ✅ FIX: Validate tool exists before invoking
-            tool_exists, error_msg = _validate_tool_exists(registry, name)
-            if not tool_exists:
-                result_str = json.dumps({"success": False, "error": error_msg})
-                _log_message(console, f"  ↩  [red]❌ {error_msg}[/red]", "error")
-                error_recovery["consecutive_failures"] = error_recovery.get("consecutive_failures", 0) + 1
-                error_recovery["failed_tools"] = error_recovery.get("failed_tools", []) + [{
-                    "tool": name,
-                    "args": {k: str(v)[:100] for k, v in args.items()},
-                    "error": error_msg[:200],
-                    "timestamp": datetime.now().isoformat(),
-                }]
-                tool_results.append(
-                    ToolMessage(
-                        content=result_str,
-                        tool_call_id=call_id,
-                        name=name,
-                    )
-                )
-                continue
+            _log(f"  ⚙  {name}({_summarise_args(args)})", "dim cyan")
 
             result_str = registry.invoke(name, args)
 
             # Parse result for context updates and phase transitions
             try:
                 result_dict = json.loads(result_str)
-
-                # ✅ FIX: Validate result is a dict
-                if not isinstance(result_dict, dict):
-                    logger.warning(f"Tool {name} returned non-dict result")
-                    result_dict = {"success": False, "error": "Invalid result format"}
 
                 # ── Auto-extract context from tool results ──
                 _auto_update_context(name, args, result_dict, ctx)
@@ -521,23 +385,21 @@ def build_tool_node(registry: ToolRegistry, console=None):
 
                 # ── Track tool failures for error recovery ──
                 if not result_dict.get("success", True):
-                    error_recovery["consecutive_failures"] = error_recovery.get("consecutive_failures", 0) + 1
-                    error_recovery["failed_tools"] = error_recovery.get("failed_tools", []) + [{
+                    error_state["consecutive_failures"] = error_state.get("consecutive_failures", 0) + 1
+                    error_state["failed_tools"] = error_state.get("failed_tools", []) + [{
                         "tool": name,
                         "args": {k: str(v)[:100] for k, v in args.items()},
                         "error": str(result_dict.get("error", "Unknown"))[:200],
                         "timestamp": datetime.now().isoformat(),
                     }]
                 else:
-                    error_recovery["consecutive_failures"] = 0
+                    error_state["consecutive_failures"] = 0
 
-            except Exception as e:
-                logger.warning(f"Tool {name} result parsing failed: {e}")
-                result_dict = {"success": False, "error": f"Parse error: {str(e)}"}
-                error_recovery["consecutive_failures"] = error_recovery.get("consecutive_failures", 0) + 1
+            except Exception:
+                pass
 
             display = result_str[:300] + "…" if len(result_str) > 300 else result_str
-            _log_message(console, f"  ↩  {display}", "info")
+            _log(f"  ↩  {display}", "dim green")
 
             tool_results.append(
                 ToolMessage(
@@ -547,20 +409,12 @@ def build_tool_node(registry: ToolRegistry, console=None):
                 )
             )
 
-        # Increment iteration consistently
-        new_iteration = iteration + 1
-
         return {
-            "messages": _truncate_messages(state.get("messages", []) + tool_results),
+            "messages": tool_results,
             "next_step": "agent",
             "phase": phase,
             "context": ctx,
-            "plan": plan,
-            "reflection": reflection,
-            "error_recovery": error_recovery,
-            "quality_scores": quality_scores,
-            "phase_results": phase_results,
-            "iteration": new_iteration,
+            "error_recovery": error_state,
         }
 
     return tool_node
@@ -577,16 +431,14 @@ def _auto_update_context(
         return
 
     if "load_data" in tool_name:
-        # ✅ FIX: Only set if not already defined (preserve user settings)
-        if not ctx.get("table_path"):
-            ctx["table_path"] = args.get("path")
+        ctx["table_path"] = args.get("path", ctx.get("table_path"))
         if result.get("potential_spend_columns"):
             ctx["channel_cols"] = result["potential_spend_columns"]
         if result.get("potential_kpi_columns"):
             kpis = result["potential_kpi_columns"]
             if kpis and not ctx.get("kpi_col"):
                 ctx["kpi_col"] = kpis[0]  # auto-select first candidate
-        if result.get("time_column") and not ctx.get("date_col"):
+        if result.get("time_column"):
             ctx["date_col"] = result["time_column"]
 
     elif "inspect_data" in tool_name:
@@ -629,15 +481,14 @@ def _update_phase(tool_name: str, result: Dict, current_phase: str) -> str:
 
     for pattern, new_phase in transitions.items():
         if pattern in tool_name:
-            # ✅ FIX: Validate transition but allow with warning if blocked
+            # Validate transition is allowed
             if validate_phase_transition(current_phase, new_phase):
                 return new_phase
-            # Log warning but still allow transition - Quality Gate will validate
-            logger.warning(
-                f"Phase transition {current_phase} → {new_phase} unusual but allowing "
-                f"(Quality Gate will validate)"
+            # If not valid, stay in current — the quality gate will handle it
+            logger.debug(
+                f"Phase transition {current_phase} → {new_phase} blocked by validator"
             )
-            return new_phase
+            return current_phase
 
     return current_phase
 
@@ -646,7 +497,7 @@ def _update_phase(tool_name: str, result: Dict, current_phase: str) -> str:
 # 4. REFLECTION NODE
 # ─────────────────────────────────────────────
 
-def build_reflection_node(llm, console=None):
+def build_reflection_node(llm):
     """
     Self-evaluation node. After the agent finishes acting, the reflection
     node evaluates what was accomplished vs. the plan, scores quality,
@@ -658,30 +509,20 @@ def build_reflection_node(llm, console=None):
 
         phase = state.get("phase", Phase.IDLE.value)
         plan = state.get("plan", empty_plan())
-        ctx = dict(state.get("context", {}))
+        ctx = state.get("context", {})
         iteration = state.get("iteration", 0)
-        error_recovery = dict(state.get("error_recovery", empty_error_recovery()))
-        quality_scores = dict(state.get("quality_scores", {}))
-        phase_results = dict(state.get("phase_results", {}))
 
         # For truly empty plans (no steps), skip reflection gracefully
         if not plan.get("steps") and phase == Phase.IDLE.value:
             return {
-                "messages": _truncate_messages(state.get("messages", [])),
+                "messages": [],
                 "next_step": "end",
-                "phase": phase,
-                "context": ctx,
-                "plan": plan,
                 "reflection": empty_reflection(),
-                "error_recovery": error_recovery,
-                "quality_scores": quality_scores,
-                "phase_results": phase_results,
-                "iteration": iteration + 1,
             }
 
         # Gather recent agent actions from message history
-        recent_actions: List[str] = []
-        for msg in state.get("messages", [])[-REFLECTION_MESSAGE_WINDOW:]:
+        recent_actions = []
+        for msg in state.get("messages", [])[-15:]:  # last 15 messages
             if isinstance(msg, ToolMessage):
                 content = getattr(msg, "content", "")
                 name = getattr(msg, "name", "tool")
@@ -746,7 +587,6 @@ DECISION RULES:
 
         except Exception as exc:
             logger.warning(f"[REFLECT] Parse failed: {exc}, defaulting to phase_complete")
-            _log_message(console, f"[yellow]⚠ Reflection parse failed: {exc}[/yellow]", "warning")
             reflection = {
                 "assessment": "Reflection could not parse LLM response",
                 "quality_score": 0.5,
@@ -780,22 +620,14 @@ DECISION RULES:
             next_step = "agent"
 
         # Store quality score
+        quality_scores = dict(state.get("quality_scores", {}))
         quality_scores[phase] = reflection["quality_score"]
 
-        # Increment iteration consistently
-        new_iteration = iteration + 1
-
         return {
-            "messages": _truncate_messages(state.get("messages", []) + [reflect_msg]),
+            "messages": [reflect_msg],
             "next_step": next_step,
-            "phase": phase,
-            "context": ctx,
-            "plan": plan,
             "reflection": reflection,
-            "error_recovery": error_recovery,  # ✅ FIX: Preserve error_recovery
             "quality_scores": quality_scores,
-            "phase_results": phase_results,
-            "iteration": new_iteration,
         }
 
     return reflection_node
@@ -811,15 +643,19 @@ def build_quality_gate_node(console=None):
     quality thresholds, and advances the workflow phase.
     """
 
+    def _log(msg: str, style: str = "cyan") -> None:
+        if console:
+            console.print(f"[{style}]{msg}[/{style}]")
+        else:
+            logger.info(msg)
+
     def quality_gate_node(state: AgentState) -> Dict[str, Any]:
         phase = state.get("phase", Phase.IDLE.value)
         quality_scores = state.get("quality_scores", {})
         phase_results_all = dict(state.get("phase_results", {}))
-        reflection = state.get("reflection", empty_reflection())
+        reflection = state.get("reflection", {})
         iteration = state.get("iteration", 0)
-        ctx = dict(state.get("context", {}))
-        plan = state.get("plan", empty_plan())
-        error_recovery = dict(state.get("error_recovery", empty_error_recovery()))
+        ctx = state.get("context", {})
 
         current_score = quality_scores.get(phase, 0.0)
         threshold = PHASE_QUALITY_THRESHOLDS.get(phase, 0.3)
@@ -832,12 +668,11 @@ def build_quality_gate_node(console=None):
         }
 
         # Check quality threshold
-        if current_score < threshold and iteration < QUALITY_GATE_RETRY_THRESHOLD:
-            _log_message(
-                console,
+        if current_score < threshold and iteration < 35:
+            _log(
                 f"  🚧 [GATE] Phase '{phase}' quality {current_score:.0%} < "
                 f"threshold {threshold:.0%} — sending back for retry",
-                "warning"
+                "yellow"
             )
             gate_msg = AIMessage(
                 content=(
@@ -846,46 +681,31 @@ def build_quality_gate_node(console=None):
                 )
             )
             return {
-                "messages": _truncate_messages(state.get("messages", []) + [gate_msg]),
+                "messages": [gate_msg],
                 "next_step": "planner",  # re-plan with feedback
-                "phase": phase,
-                "context": ctx,
-                "plan": plan,
-                "reflection": reflection,
-                "error_recovery": error_recovery,
-                "quality_scores": quality_scores,
                 "phase_results": phase_results_all,
-                "iteration": iteration + 1,
             }
 
         # Advance to next phase
         next_phase = get_next_phase(phase)
 
-        # ✅ FIX: Check next_phase instead of current phase
-        if next_phase is None or next_phase == Phase.DONE.value:
-            _log_message(console, f"  ✅ [GATE] All phases complete!", "info")
+        if next_phase is None or phase == Phase.DONE.value:
+            _log(f"  ✅ [GATE] All phases complete!", "bold green")
             gate_msg = AIMessage(
                 content=f"✅ **Quality Gate**: All phases complete! Final quality scores: "
                         f"{json.dumps({k: f'{v:.0%}' for k, v in quality_scores.items()})}"
             )
             return {
-                "messages": _truncate_messages(state.get("messages", []) + [gate_msg]),
+                "messages": [gate_msg],
                 "next_step": "end",
                 "phase": Phase.DONE.value,
-                "context": ctx,
-                "plan": plan,
-                "reflection": reflection,
-                "error_recovery": error_recovery,
-                "quality_scores": quality_scores,
                 "phase_results": phase_results_all,
-                "iteration": iteration + 1,
             }
 
-        _log_message(
-            console,
+        _log(
             f"  ✅ [GATE] Phase '{phase}' passed ({current_score:.0%} ≥ {threshold:.0%}) "
             f"→ advancing to '{next_phase}'",
-            "info"
+            "bold green"
         )
 
         # Record phase transition in context
@@ -905,20 +725,15 @@ def build_quality_gate_node(console=None):
             )
         )
 
-        # Increment iteration consistently
-        new_iteration = iteration + 1
-
         return {
-            "messages": _truncate_messages(state.get("messages", []) + [gate_msg]),
+            "messages": [gate_msg],
             "next_step": "planner",
             "phase": next_phase,
+            "phase_results": phase_results_all,
             "context": new_ctx,
             "plan": empty_plan(),          # fresh plan for new phase
             "reflection": empty_reflection(),  # reset reflection
             "error_recovery": empty_error_recovery(),  # reset errors
-            "quality_scores": quality_scores,
-            "phase_results": phase_results_all,
-            "iteration": new_iteration,
         }
 
     return quality_gate_node

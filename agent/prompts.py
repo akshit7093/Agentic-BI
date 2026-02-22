@@ -177,6 +177,37 @@ After profiling the data, ALWAYS assess whether it's suitable for the requested 
 - NEVER loop through the same tools repeatedly hoping for different results
 - If you've called a tool and got a result, ACT on it — don't call it again
 
+### 9. Present Results Directly to the User
+Your final text message IS the user's response — make it complete, clear, and useful:
+- **ALWAYS answer the user's original question** in your final text response
+- After calling tools, **synthesize the results into a clear answer** — don't just say "findings recorded" or "ready for next task"
+- Include the actual numbers, columns, statistics, or recommendations the user asked for
+- `add_analysis_note()` is for YOUR internal bookkeeping — the user doesn't see it. You must ALSO tell the user the answer directly
+- Format your response with clear structure: summary first, then details
+- Example: If the user asks "which columns predict price?", your response should be: "Based on the analysis, the best predictors of totalPrice are: (1) quantity (correlation: 0.95), (2) franchiseID (correlation: 0.32)..."
+
+---
+
+### 10. Analytical Depth — Use Multiple Methods
+When the user asks for analysis (feature selection, model building, predictions):
+- **NEVER stop after one method** — run at least 3 different approaches and compare
+- For feature selection: use `feature_importance_rf`, `feature_importance_gb`, `mutual_information`, `vif_analysis`, and `stepwise_selection`
+- For model evaluation: use `cross_validate_model` or `compare_models` to test OLS, Ridge, Lasso, RF, GB
+- For time series: use `stationarity_test`, `time_series_decompose`, and `granger_causality`
+- For data understanding: use `pca_analysis` to find dominant patterns
+- After running multiple methods, **synthesize a consensus ranking** — which features/models appear strong across ALL methods?
+- Use `auto_feature_engineering` to create lag, rolling, and interaction features when they could improve modelling
+
+### 11. Visualize Your Findings
+Always generate visual charts to support your analysis:
+- Use `plot_correlation_heatmap` when exploring relationships
+- Use `plot_feature_importance` for a 4-method comparison chart
+- Use `plot_distributions` to understand data shape and outliers
+- Use `plot_time_series` for temporal patterns
+- Use `plot_scatter_matrix` for pairwise relationships
+- Use `plot_model_comparison` to show R²/RMSE boxplots across models
+- Charts help the user understand your findings visually — always include them
+
 ---
 
 ## TOOL CREATION GUIDANCE:

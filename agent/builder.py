@@ -44,6 +44,8 @@ def _build_tool_registry(engine: MMMEngine) -> ToolRegistry:
     from ..tools.data_tools import build_data_tools
     from ..tools.mmm_tools import build_mmm_tools
     from ..tools.custom_tools import build_meta_tools
+    from ..tools.analytics_tools import build_analytics_tools
+    from ..tools.viz_tools import build_viz_tools
 
     registry = ToolRegistry()
 
@@ -52,6 +54,12 @@ def _build_tool_registry(engine: MMMEngine) -> ToolRegistry:
 
     # MMM tools (9 tools)
     registry.register_many(build_mmm_tools(engine))
+
+    # Advanced analytics tools (12 tools) — ML, PCA, VIF, Granger, etc.
+    registry.register_many(build_analytics_tools(engine))
+
+    # Visualization tools (6 tools) — charts, heatmaps, scatter matrices
+    registry.register_many(build_viz_tools(engine))
 
     # Meta / custom tools (9 tools) — needs registry for self-extension
     registry.register_many(build_meta_tools(registry, engine))
