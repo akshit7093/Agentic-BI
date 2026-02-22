@@ -118,7 +118,7 @@ def _run_react_subagent(
         retries = state.get("retries", 0)
         if retries >= _MAX_RETRIES:
             logger.warning(f"[{agent_name}] Max retries ({_MAX_RETRIES}) reached")
-            stop_msg = AIMessage(content=f"⚠ Max retries reached. Last state: {state['messages'][-1].content[:300]}")
+            stop_msg = HumanMessage(content=f"[System Note] ⚠ Max retries reached. Last state: {state['messages'][-1].content[:300]}")
             return {"messages": [stop_msg], "retries": retries}
 
         sys = SystemMessage(content=system_prompt)
@@ -135,7 +135,7 @@ def _run_react_subagent(
             return {"messages": [response], "retries": retries}
         except Exception as exc:
             logger.error(f"[{agent_name}] LLM invoke failed: {exc}")
-            err = AIMessage(content=f"⚠ LLM error: {exc}")
+            err = HumanMessage(content=f"[System Note] ⚠ LLM error: {exc}")
             return {"messages": [err], "retries": retries + 1}
 
     def execute_tools(state: _SubState) -> Dict:

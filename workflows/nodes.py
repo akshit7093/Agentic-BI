@@ -325,8 +325,8 @@ def build_agent_node(llm_with_tools, system_message_fn, console=None):
         if iteration >= MAX_ITERATIONS:
             logger.warning(f"[AGENT] Max iterations ({MAX_ITERATIONS}) reached — stopping")
             _log_message(console, f"[yellow]⚠ Max iterations ({MAX_ITERATIONS}) reached[/yellow]", "warning")
-            err_msg = AIMessage(
-                content="⚠️ Maximum iteration limit reached. Routing to reflection for assessment."
+            err_msg = HumanMessage(
+                content="[System Note] ⚠️ Maximum iteration limit reached. Routing to reflection for assessment."
             )
             return {
                 "messages": _truncate_messages(state.get("messages", []) + [err_msg]),
@@ -364,9 +364,9 @@ def build_agent_node(llm_with_tools, system_message_fn, console=None):
             if error_recovery["consecutive_failures"] <= error_recovery.get("max_retries", MAX_RETRIES):
                 # Retry: inject error context and try again
                 logger.info(f"[AGENT] Error recovery attempt {error_recovery['consecutive_failures']}")
-                err_msg = AIMessage(
-                    content=f"⚠️ LLM error (attempt {error_recovery['consecutive_failures']}): {exc}. "
-                            f"I will try a different approach."
+                err_msg = HumanMessage(
+                    content=f"[System Note] ⚠️ LLM error (attempt {error_recovery['consecutive_failures']}): {exc}. "
+                            f"Please try a different approach."
                 )
                 return {
                     "messages": _truncate_messages(state.get("messages", []) + [err_msg]),
@@ -778,7 +778,7 @@ DECISION RULES:
             f"- Decision: **{reflection['decision']}**\n"
             f"- {reflection['assessment'][:200]}"
         )
-        reflect_msg = AIMessage(content=reflect_summary)
+        reflect_msg = HumanMessage(content=reflect_summary)
 
         # Route based on decision
         decision = reflection["decision"]
@@ -849,7 +849,7 @@ def build_quality_gate_node(console=None):
                 f"threshold {threshold:.0%} — sending back for retry",
                 "warning"
             )
-            gate_msg = AIMessage(
+            gate_msg = HumanMessage(
                 content=(
                     f"🚧 **Quality Gate**: Phase '{phase}' scored {current_score:.0%} "
                     f"(threshold: {threshold:.0%}). Sending back to planner for improvement."
@@ -874,7 +874,7 @@ def build_quality_gate_node(console=None):
         # ✅ FIX: Check next_phase instead of current phase
         if next_phase is None or next_phase == Phase.DONE.value:
             _log_message(console, f"  ✅ [GATE] All phases complete!", "info")
-            gate_msg = AIMessage(
+            gate_msg = HumanMessage(
                 content=f"✅ **Quality Gate**: All phases complete! Final quality scores: "
                         f"{json.dumps({k: f'{v:.0%}' for k, v in quality_scores.items()})}"
             )
@@ -908,9 +908,9 @@ def build_quality_gate_node(console=None):
         })
         new_ctx = {**ctx, "phase_history": phase_history}
 
-        gate_msg = AIMessage(
+        gate_msg = HumanMessage(
             content=(
-                f"✅ **Quality Gate**: Phase '{phase}' passed with {current_score:.0%}. "
+                f"[System Note] ✅ **Quality Gate**: Phase '{phase}' passed with {current_score:.0%}. "
                 f"Advancing to **{next_phase}**."
             )
         )
