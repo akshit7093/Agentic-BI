@@ -106,16 +106,21 @@ def _summarise_args(args: Dict[str, Any]) -> str:
         parts.append(f"{k}={sv[:40]!r}" if len(sv) > 40 else f"{k}={v!r}")
     return ", ".join(parts)
 
+import re as _re
+
+def _strip_rich_tags(text: str) -> str:
+    """Remove Rich markup tags like [bold red]...[/bold red] for plain output."""
+    return _re.sub(r'\[/?[a-zA-Z_ ]+\]', '', text)
+
 
 def _log_message(console: Optional[Any], msg: str, level: str = "info") -> None:
     """
     Standardized logging function.
-    Logs to both console (if available) and Python logger.
+    Uses plain print() to avoid Rich FileProxy recursion in Databricks.
     """
-    if console:
-        console.print(msg)
+    print(_strip_rich_tags(msg))
     log_func = getattr(logger, level, logger.info)
-    log_func(msg)
+    log_func(_strip_rich_tags(msg))
 
 
 def _truncate_messages(messages: List[BaseMessage], max_count: int = MAX_MESSAGES_KEEP) -> List[BaseMessage]:

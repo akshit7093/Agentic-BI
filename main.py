@@ -1,31 +1,15 @@
 # =============================================================
 # main.py — Entry point: NotebookMMM class + init_mmm()
 # =============================================================
+# NOTE: Rich library completely removed to prevent infinite
+# recursion in Databricks/Jupyter (FileProxy ↔ ipython_display).
 
 import json
 import logging
 import os
-import sys
 import traceback
 import uuid
-from typing import Any, Dict, Optional
-
-# ── Fix Rich + Databricks/Jupyter infinite recursion ──────────
-# Rich installs a FileProxy on sys.stdout at import time.
-# In Jupyter, this creates: stdout.flush → Rich console.print
-# → ipython_display → stdout.flush → ∞ recursion.
-# Fix: save original stdout, import Rich, then restore it.
-_original_stdout = sys.stdout
-_original_stderr = sys.stderr
-
-from rich.console import Console
-from rich.markdown import Markdown
-from rich.panel import Panel
-from rich.table import Table
-
-# Restore original stdout/stderr to remove Rich's FileProxy
-sys.stdout = _original_stdout
-sys.stderr = _original_stderr
+from typing import Any, Dict, List, Optional
 
 from .core.mmm_engine import MMMEngine
 from .workflows.state import initial_state, Phase
@@ -44,7 +28,46 @@ except ImportError:
     SPARK_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
-console = Console(force_terminal=True, file=_original_stdout)
+
+
+# =============================================================
+# Plain-text formatting helpers (Rich-free)
+# =============================================================
+
+def _banner(text: str, char: str = "═", width: int = 60) -> str:
+    """Create a simple banner box."""
+    border = char * width
+    lines = text.strip().split("\n")
+    padded = "\n".join(f"  {line}" for line in lines)
+    return f"{border}\n{padded}\n{border}"
+
+
+def _table_str(title: str, headers: List[str], rows: List[List[str]]) -> str:
+    """Create a simple ASCII table."""
+    # Calculate column widths
+    col_widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            if i < len(col_widths):
+                col_widths[i] = max(col_widths[i], len(str(cell)))
+
+    # Build header
+    header_line = " | ".join(h.ljust(col_widths[i]) for i, h in enumerate(headers))
+    separator = "-+-".join("-" * w for w in col_widths)
+
+    # Build rows
+    row_lines = []
+    for row in rows:
+        cells = []
+        for i, cell in enumerate(row):
+            w = col_widths[i] if i < len(col_widths) else len(str(cell))
+            cells.append(str(cell).ljust(w))
+        row_lines.append(" | ".join(cells))
+
+    parts = [f"\n  {title}", f"  {header_line}", f"  {separator}"]
+    for rl in row_lines:
+        parts.append(f"  {rl}")
+    return "\n".join(parts)
 
 
 # =============================================================
@@ -87,16 +110,16 @@ class NotebookMMM:
         auto_load: bool = True,
         spark=None,
     ):
-        console.print(Panel.fit(
-            "[bold blue]🤖 Agentic MMM System[/bold blue]\n"
-            "[dim]Intelligent Data Analyst & Marketing Mix Modelling Agent[/dim]",
+        print(_banner(
+            "🤖 Agentic MMM System\n"
+            "Intelligent Data Analyst & Marketing Mix Modelling Agent"
         ))
 
         self._spark = spark or (_get_spark() if SPARK_AVAILABLE else None)
         if self._spark:
-            console.print("[green]✅ Spark session active[/green]")
+            print("✅ Spark session active")
         else:
-            console.print("[yellow]⚠ Spark unavailable — CSV/local mode only[/yellow]")
+            print("⚠ Spark unavailable — CSV/local mode only")
 
         self.engine = MMMEngine(self._spark)
         self._table = table
@@ -116,16 +139,16 @@ class NotebookMMM:
 
     def load(self, path: str) -> bool:
         """Load data directly (no agent)."""
-        console.print(f"Loading: [cyan]{path}[/cyan]")
+        print(f"Loading: {path}")
         res = self.engine.load_data(path)
         if res["success"]:
-            console.print(f"[green]✅ {res['rows']:,} rows × {len(res['columns'])} columns[/green]")
+            print(f"✅ {res['rows']:,} rows × {len(res['columns'])} columns")
             if res.get("potential_spend_columns"):
-                console.print(f"   💡 Spend columns detected: {res['potential_spend_columns']}")
+                print(f"   💡 Spend columns detected: {res['potential_spend_columns']}")
             if res.get("potential_kpi_columns"):
-                console.print(f"   💡 KPI columns detected: {res['potential_kpi_columns']}")
+                print(f"   💡 KPI columns detected: {res['potential_kpi_columns']}")
             return True
-        console.print(f"[red]❌ Load failed: {res['error']}[/red]")
+        print(f"❌ Load failed: {res['error']}")
         return False
 
     def inspect(self) -> Dict[str, Any]:
@@ -134,19 +157,18 @@ class NotebookMMM:
         if res.get("success"):
             self._print_inspection(res)
         else:
-            console.print(f"[red]❌ {res['error']}[/red]")
+            print(f"❌ {res['error']}")
         return res
 
     def _print_inspection(self, res: Dict[str, Any]) -> None:
-        tbl = Table(title="Dataset Profile", show_header=True)
-        tbl.add_column("Property", style="cyan")
-        tbl.add_column("Value")
-        tbl.add_row("Shape", f"{res['rows']:,} rows × {len(res['columns'])} cols")
-        tbl.add_row("Spend cols", str(res.get("potential_spend_columns", [])))
-        tbl.add_row("KPI cols", str(res.get("potential_kpi_columns", [])))
-        tbl.add_row("Time col", str(res.get("time_column")))
-        tbl.add_row("Nulls (any)", str(any(v > 0 for v in res.get("null_pct", {}).values())))
-        console.print(tbl)
+        rows = [
+            ["Shape", f"{res['rows']:,} rows × {len(res['columns'])} cols"],
+            ["Spend cols", str(res.get("potential_spend_columns", []))],
+            ["KPI cols", str(res.get("potential_kpi_columns", []))],
+            ["Time col", str(res.get("time_column"))],
+            ["Nulls (any)", str(any(v > 0 for v in res.get("null_pct", {}).values()))],
+        ]
+        print(_table_str("Dataset Profile", ["Property", "Value"], rows))
 
     # ─────────────────────────────────────────────
     # AGENT OPERATIONS
@@ -160,10 +182,10 @@ class NotebookMMM:
             self._graph, self._registry = build_agent(
                 self.engine,
                 llm_endpoint=self._llm_endpoint,
-                console=console,
+                console=None,  # No Rich console — we use plain print()
             )
         except Exception as exc:
-            console.print(f"[red]❌ Agent init failed: {exc}[/red]")
+            print(f"❌ Agent init failed: {exc}")
             raise
 
     def ask(
@@ -178,7 +200,7 @@ class NotebookMMM:
         """
         self._ensure_agent()
         tid = thread_id or self._thread_id
-        console.print(f"\n[bold cyan]You:[/bold cyan] {question}")
+        print(f"\n🧑 You: {question}")
 
         config = {"configurable": {"thread_id": tid}}
         input_state = {
@@ -200,45 +222,46 @@ class NotebookMMM:
         # Intent-based limits: set after planner runs
         # Default high limit; planner output refines it
         max_tool_calls = 50  # default for analysis
+        intent = "analysis"
 
-        with console.status("[bold green]Agent working…[/bold green]"):
-            try:
-                for event in self._graph.stream(input_state, config):
-                    for node_name, node_data in event.items():
+        print("⏳ Agent working…")
+        try:
+            for event in self._graph.stream(input_state, config):
+                for node_name, node_data in event.items():
 
-                        # After planner runs, set intent-based tool limit
-                        if node_name == "planner" and "plan" in node_data:
-                            intent = node_data["plan"].get("intent", "analysis")
-                            max_tool_calls = {
-                                "simple": 5,
-                                "data_query": 15,
-                                "analysis": 50,
-                            }.get(intent, 50)
+                    # After planner runs, set intent-based tool limit
+                    if node_name == "planner" and "plan" in node_data:
+                        intent = node_data["plan"].get("intent", "analysis")
+                        max_tool_calls = {
+                            "simple": 5,
+                            "data_query": 15,
+                            "analysis": 50,
+                        }.get(intent, 50)
 
-                        # Count only actual tool executions
-                        if node_name == "tools":
-                            tool_call_count += 1
-                            if tool_call_count > max_tool_calls:
-                                console.print(
-                                    f"[yellow]⚠ Safety limit: {max_tool_calls} "
-                                    f"tool calls reached for intent '{intent}'[/yellow]"
-                                )
-                                break
+                    # Count only actual tool executions
+                    if node_name == "tools":
+                        tool_call_count += 1
+                        if tool_call_count > max_tool_calls:
+                            print(
+                                f"⚠ Safety limit: {max_tool_calls} "
+                                f"tool calls reached for intent '{intent}'"
+                            )
+                            break
 
-                        if node_name == "agent" and "messages" in node_data:
-                            msgs = node_data["messages"]
-                            if msgs:
-                                msg = msgs[-1]
-                                if isinstance(msg, AIMessage) and msg.content:
-                                    tc = getattr(msg, "tool_calls", None)
-                                    if not tc:
-                                        final_response = str(msg.content)
-                    else:
-                        continue  # inner loop didn't break
-                    break  # inner loop broke → stop outer loop too
-            except Exception as exc:
-                traceback.print_exc()
-                final_response = f"⚠ Agent error: {exc}"
+                    if node_name == "agent" and "messages" in node_data:
+                        msgs = node_data["messages"]
+                        if msgs:
+                            msg = msgs[-1]
+                            if isinstance(msg, AIMessage) and msg.content:
+                                tc = getattr(msg, "tool_calls", None)
+                                if not tc:
+                                    final_response = str(msg.content)
+                else:
+                    continue  # inner loop didn't break
+                break  # inner loop broke → stop outer loop too
+        except Exception as exc:
+            traceback.print_exc()
+            final_response = f"⚠ Agent error: {exc}"
 
         # Fallback: read from checkpoint
         if final_response is None:
@@ -267,7 +290,7 @@ class NotebookMMM:
             pass
 
         output = final_response or "(No text response generated — see tool outputs above)"
-        console.print(Panel(Markdown(output), title="[bold blue]🤖 Agent[/bold blue]", border_style="blue"))
+        print(_banner(f"🤖 Agent\n\n{output}"))
         return output
 
     # ─────────────────────────────────────────────
@@ -314,18 +337,16 @@ class NotebookMMM:
         """Start an interactive chat session with the agent."""
         self._ensure_agent()
 
-        console.print(Panel.fit(
-            "[bold green]💬 Interactive MMM Agent Chat[/bold green]\n\n"
-            "[cyan]Try:[/cyan]\n"
-            "  • [white]'profile the data'[/white]\n"
-            "  • [white]'which columns are suitable for MMM?'[/white]\n"
-            "  • [white]'run full MMM analysis'[/white]\n"
-            "  • [white]'optimise my $1M budget'[/white]\n"
-            "  • [white]'create a tool to detect seasonality'[/white]\n"
-            "  • [white]'show me the analysis history'[/white]\n\n"
-            "[yellow]Type 'quit' to exit | 'new' for a new conversation thread[/yellow]",
-            title="Chat Mode",
-            border_style="green",
+        print(_banner(
+            "💬 Interactive MMM Agent Chat\n\n"
+            "Try:\n"
+            "  • 'profile the data'\n"
+            "  • 'which columns are suitable for MMM?'\n"
+            "  • 'run full MMM analysis'\n"
+            "  • 'optimise my $1M budget'\n"
+            "  • 'create a tool to detect seasonality'\n"
+            "  • 'show me the analysis history'\n\n"
+            "Type 'quit' to exit | 'new' for a new conversation thread"
         ))
 
         thread_id = str(uuid.uuid4())
@@ -339,25 +360,25 @@ class NotebookMMM:
                 cmd = user_input.lower().strip()
 
                 if cmd in ("quit", "exit", "q", "bye"):
-                    console.print("[yellow]👋 Goodbye![/yellow]")
+                    print("👋 Goodbye!")
                     break
 
                 if cmd == "new":
                     thread_id = str(uuid.uuid4())
-                    console.print("[cyan]🔄 New conversation thread started[/cyan]")
+                    print("🔄 New conversation thread started")
                     continue
 
                 if cmd == "status":
                     status = self.engine.get_status()
-                    console.print_json(json.dumps(status, default=str))
+                    print(json.dumps(status, default=str, indent=2))
                     continue
 
                 if cmd == "tools":
                     if self._registry:
                         tools = self._registry.list_tools()
                         for t in tools:
-                            tag = "[cyan][custom][/cyan] " if t.get("dynamic") else ""
-                            console.print(f"  {tag}[bold]{t['name']}[/bold]: {t['description']}")
+                            tag = "[custom] " if t.get("dynamic") else ""
+                            print(f"  {tag}{t['name']}: {t['description']}")
                     continue
 
                 if cmd.startswith("load "):
@@ -368,9 +389,9 @@ class NotebookMMM:
                 self.ask(user_input, thread_id=thread_id)
 
             except KeyboardInterrupt:
-                console.print("\n[yellow]Interrupted — type 'quit' to exit[/yellow]")
+                print("\nInterrupted — type 'quit' to exit")
             except Exception as exc:
-                console.print(f"[red]Error: {exc}[/red]")
+                print(f"Error: {exc}")
 
     # ─────────────────────────────────────────────
     # DIRECT ENGINE ACCESS (no agent)
@@ -416,26 +437,22 @@ def tool_fn(column):
         extra = {"df": self.engine.data, "engine": self.engine}
         result = self._registry.register_from_spec(spec, extra_globals=extra)
         if result.get("success"):
-            # Rebind LLM tools to include new tool
-            console.print(f"[green]✅ Custom tool '{name}' registered[/green]")
+            print(f"✅ Custom tool '{name}' registered")
         else:
-            console.print(f"[red]❌ Tool registration failed: {result.get('error')}[/red]")
+            print(f"❌ Tool registration failed: {result.get('error')}")
         return result
 
     def list_tools(self) -> None:
         """Print all available tools."""
         if not self._registry:
-            console.print("[yellow]Agent not yet initialised — call ask() or chat() first[/yellow]")
+            print("Agent not yet initialised — call ask() or chat() first")
             return
         tools = self._registry.list_tools()
-        tbl = Table(title=f"Available Tools ({len(tools)})")
-        tbl.add_column("Name", style="bold cyan")
-        tbl.add_column("Type")
-        tbl.add_column("Description")
+        rows = []
         for t in tools:
-            kind = "[green]custom[/green]" if t.get("dynamic") else "built-in"
-            tbl.add_row(t["name"], kind, t["description"][:80])
-        console.print(tbl)
+            kind = "custom" if t.get("dynamic") else "built-in"
+            rows.append([t["name"], kind, t["description"][:80]])
+        print(_table_str(f"Available Tools ({len(tools)})", ["Name", "Type", "Description"], rows))
 
 
 # =============================================================
