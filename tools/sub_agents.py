@@ -258,7 +258,7 @@ def build_data_agent_tool(llm, engine: MMMEngine) -> StructuredTool:
     # Add PythonAstREPLTool (gives the LLM a live Python REPL against df)
     try:
         from langchain_experimental.tools import PythonAstREPLTool
-        df = engine.df
+        df = engine.data
         repl_locals = {"df": df, "pd": None, "np": None}
         try:
             import pandas as pd
@@ -282,7 +282,7 @@ def build_data_agent_tool(llm, engine: MMMEngine) -> StructuredTool:
             The table is accessible as 'data'. Example: SELECT COUNT(*) FROM data"""
             from pydantic import BaseModel, Field as PField
 
-            df = engine.df
+            df = engine.data
             if df is None:
                 return json.dumps({"error": "No data loaded"})
             try:
@@ -319,7 +319,7 @@ def build_data_agent_tool(llm, engine: MMMEngine) -> StructuredTool:
             from langchain_experimental.tools import PythonAstREPLTool
             for t in data_tools:
                 if isinstance(t, PythonAstREPLTool):
-                    t.locals["df"] = engine.df
+                    t.locals["df"] = engine.data
         except Exception:
             pass
 
