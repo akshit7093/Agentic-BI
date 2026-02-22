@@ -3,6 +3,8 @@
 # =============================================================
 # NOTE: Rich library completely removed to prevent infinite
 # recursion in Databricks/Jupyter (FileProxy ↔ ipython_display).
+# All output uses safe_print() which writes to sys.__stdout__,
+# bypassing Rich's FileProxy entirely.
 
 import json
 import logging
@@ -11,6 +13,7 @@ import traceback
 import uuid
 from typing import Any, Dict, List, Optional
 
+from ._deproxy import safe_print
 from .core.mmm_engine import MMMEngine
 from .workflows.state import initial_state, Phase
 from .config import DEFAULT_TABLE, DEFAULT_KPI_COL, DEFAULT_LLM_ENDPOINT
@@ -110,16 +113,16 @@ class NotebookMMM:
         auto_load: bool = True,
         spark=None,
     ):
-        print(_banner(
+        safe_print(_banner(
             "🤖 Agentic MMM System\n"
             "Intelligent Data Analyst & Marketing Mix Modelling Agent"
         ))
 
         self._spark = spark or (_get_spark() if SPARK_AVAILABLE else None)
         if self._spark:
-            print("✅ Spark session active")
+            safe_print("✅ Spark session active")
         else:
-            print("⚠ Spark unavailable — CSV/local mode only")
+            safe_print("⚠ Spark unavailable — CSV/local mode only")
 
         self.engine = MMMEngine(self._spark)
         self._table = table
@@ -139,16 +142,16 @@ class NotebookMMM:
 
     def load(self, path: str) -> bool:
         """Load data directly (no agent)."""
-        print(f"Loading: {path}")
+        safe_print(f"Loading: {path}")
         res = self.engine.load_data(path)
         if res["success"]:
-            print(f"✅ {res['rows']:,} rows × {len(res['columns'])} columns")
+            safe_print(f"✅ {res['rows']:,} rows × {len(res['columns'])} columns")
             if res.get("potential_spend_columns"):
-                print(f"   💡 Spend columns detected: {res['potential_spend_columns']}")
+                safe_print(f"   💡 Spend columns detected: {res['potential_spend_columns']}")
             if res.get("potential_kpi_columns"):
-                print(f"   💡 KPI columns detected: {res['potential_kpi_columns']}")
+                safe_print(f"   💡 KPI columns detected: {res['potential_kpi_columns']}")
             return True
-        print(f"❌ Load failed: {res['error']}")
+        safe_print(f"❌ Load failed: {res['error']}")
         return False
 
     def inspect(self) -> Dict[str, Any]:
@@ -157,7 +160,7 @@ class NotebookMMM:
         if res.get("success"):
             self._print_inspection(res)
         else:
-            print(f"❌ {res['error']}")
+            safe_print(f"❌ {res['error']}")
         return res
 
     def _print_inspection(self, res: Dict[str, Any]) -> None:
@@ -168,7 +171,7 @@ class NotebookMMM:
             ["Time col", str(res.get("time_column"))],
             ["Nulls (any)", str(any(v > 0 for v in res.get("null_pct", {}).values()))],
         ]
-        print(_table_str("Dataset Profile", ["Property", "Value"], rows))
+        safe_print(_table_str("Dataset Profile", ["Property", "Value"], rows))
 
     # ─────────────────────────────────────────────
     # AGENT OPERATIONS
@@ -182,10 +185,10 @@ class NotebookMMM:
             self._graph, self._registry = build_agent(
                 self.engine,
                 llm_endpoint=self._llm_endpoint,
-                console=None,  # No Rich console — we use plain print()
+                console=None,  # No Rich console — we use safe_print()
             )
         except Exception as exc:
-            print(f"❌ Agent init failed: {exc}")
+            safe_print(f"❌ Agent init failed: {exc}")
             raise
 
     def ask(
@@ -200,7 +203,7 @@ class NotebookMMM:
         """
         self._ensure_agent()
         tid = thread_id or self._thread_id
-        print(f"\n🧑 You: {question}")
+        safe_print(f"\n🧑 You: {question}")
 
         config = {"configurable": {"thread_id": tid}}
         input_state = {
@@ -220,11 +223,10 @@ class NotebookMMM:
         final_response: Optional[str] = None
         tool_call_count = 0
         # Intent-based limits: set after planner runs
-        # Default high limit; planner output refines it
         max_tool_calls = 50  # default for analysis
         intent = "analysis"
 
-        print("⏳ Agent working…")
+        safe_print("⏳ Agent working…")
         try:
             for event in self._graph.stream(input_state, config):
                 for node_name, node_data in event.items():
@@ -242,7 +244,7 @@ class NotebookMMM:
                     if node_name == "tools":
                         tool_call_count += 1
                         if tool_call_count > max_tool_calls:
-                            print(
+                            safe_print(
                                 f"⚠ Safety limit: {max_tool_calls} "
                                 f"tool calls reached for intent '{intent}'"
                             )
@@ -290,7 +292,7 @@ class NotebookMMM:
             pass
 
         output = final_response or "(No text response generated — see tool outputs above)"
-        print(_banner(f"🤖 Agent\n\n{output}"))
+        safe_print(_banner(f"🤖 Agent\n\n{output}"))
         return output
 
     # ─────────────────────────────────────────────
@@ -337,7 +339,7 @@ class NotebookMMM:
         """Start an interactive chat session with the agent."""
         self._ensure_agent()
 
-        print(_banner(
+        safe_print(_banner(
             "💬 Interactive MMM Agent Chat\n\n"
             "Try:\n"
             "  • 'profile the data'\n"
@@ -360,17 +362,17 @@ class NotebookMMM:
                 cmd = user_input.lower().strip()
 
                 if cmd in ("quit", "exit", "q", "bye"):
-                    print("👋 Goodbye!")
+                    safe_print("👋 Goodbye!")
                     break
 
                 if cmd == "new":
                     thread_id = str(uuid.uuid4())
-                    print("🔄 New conversation thread started")
+                    safe_print("🔄 New conversation thread started")
                     continue
 
                 if cmd == "status":
                     status = self.engine.get_status()
-                    print(json.dumps(status, default=str, indent=2))
+                    safe_print(json.dumps(status, default=str, indent=2))
                     continue
 
                 if cmd == "tools":
@@ -378,7 +380,7 @@ class NotebookMMM:
                         tools = self._registry.list_tools()
                         for t in tools:
                             tag = "[custom] " if t.get("dynamic") else ""
-                            print(f"  {tag}{t['name']}: {t['description']}")
+                            safe_print(f"  {tag}{t['name']}: {t['description']}")
                     continue
 
                 if cmd.startswith("load "):
@@ -389,9 +391,9 @@ class NotebookMMM:
                 self.ask(user_input, thread_id=thread_id)
 
             except KeyboardInterrupt:
-                print("\nInterrupted — type 'quit' to exit")
+                safe_print("\nInterrupted — type 'quit' to exit")
             except Exception as exc:
-                print(f"Error: {exc}")
+                safe_print(f"Error: {exc}")
 
     # ─────────────────────────────────────────────
     # DIRECT ENGINE ACCESS (no agent)
@@ -437,22 +439,22 @@ def tool_fn(column):
         extra = {"df": self.engine.data, "engine": self.engine}
         result = self._registry.register_from_spec(spec, extra_globals=extra)
         if result.get("success"):
-            print(f"✅ Custom tool '{name}' registered")
+            safe_print(f"✅ Custom tool '{name}' registered")
         else:
-            print(f"❌ Tool registration failed: {result.get('error')}")
+            safe_print(f"❌ Tool registration failed: {result.get('error')}")
         return result
 
     def list_tools(self) -> None:
         """Print all available tools."""
         if not self._registry:
-            print("Agent not yet initialised — call ask() or chat() first")
+            safe_print("Agent not yet initialised — call ask() or chat() first")
             return
         tools = self._registry.list_tools()
         rows = []
         for t in tools:
             kind = "custom" if t.get("dynamic") else "built-in"
             rows.append([t["name"], kind, t["description"][:80]])
-        print(_table_str(f"Available Tools ({len(tools)})", ["Name", "Type", "Description"], rows))
+        safe_print(_table_str(f"Available Tools ({len(tools)})", ["Name", "Type", "Description"], rows))
 
 
 # =============================================================

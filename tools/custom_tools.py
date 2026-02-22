@@ -4,7 +4,10 @@
 
 import json
 import logging
+import sys
 from typing import Any, Dict, List, Optional
+
+from .._deproxy import safe_print
 
 from pydantic import BaseModel, Field
 from langchain_core.tools import StructuredTool
@@ -119,14 +122,15 @@ def build_meta_tools(registry: ToolRegistry, engine: MMMEngine) -> List[Structur
     # ── User interaction ──
 
     def ask_user_for_input(question: str, options: Optional[str] = None) -> str:
-        """Ask user a question and return their response (blocking)."""
-        print(f"\n{'='*60}")
-        print(f"🤖 Agent needs clarification:")
-        print(f"   {question}")
+        """Ask user a question and return their response (blocking).
+        Uses safe_print() to avoid Rich FileProxy recursion in Databricks."""
+        safe_print(f"\n{'='*60}")
+        safe_print(f"🤖 Agent needs clarification:")
+        safe_print(f"   {question}")
         if options:
             opt_list = [o.strip() for o in options.split(",")]
             for i, o in enumerate(opt_list, 1):
-                print(f"   {i}. {o}")
+                safe_print(f"   {i}. {o}")
             try:
                 user_in = input("Your choice (number or text): ").strip()
                 # If numeric, map to option
@@ -143,7 +147,7 @@ def build_meta_tools(registry: ToolRegistry, engine: MMMEngine) -> List[Structur
                 user_in = input("Your answer: ").strip()
             except EOFError:
                 user_in = ""
-        print(f"{'='*60}")
+        safe_print(f"{'='*60}")
         return _j({"success": True, "question": question, "user_response": user_in})
 
     def ask_user_to_choose(question: str, choices: str) -> str:

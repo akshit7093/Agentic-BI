@@ -107,6 +107,7 @@ def _summarise_args(args: Dict[str, Any]) -> str:
     return ", ".join(parts)
 
 import re as _re
+from .._deproxy import safe_print as _safe_print
 
 def _strip_rich_tags(text: str) -> str:
     """Remove Rich markup tags like [bold red]...[/bold red] for plain output."""
@@ -116,9 +117,10 @@ def _strip_rich_tags(text: str) -> str:
 def _log_message(console: Optional[Any], msg: str, level: str = "info") -> None:
     """
     Standardized logging function.
-    Uses plain print() to avoid Rich FileProxy recursion in Databricks.
+    Uses safe_print() which writes to sys.__stdout__ to avoid
+    Rich FileProxy recursion in Databricks/Jupyter.
     """
-    print(_strip_rich_tags(msg))
+    _safe_print(_strip_rich_tags(msg))
     log_func = getattr(logger, level, logger.info)
     log_func(_strip_rich_tags(msg))
 
