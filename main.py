@@ -31,7 +31,7 @@ except ImportError:
     SPARK_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
-console = Console()
+console = Console(force_terminal=True)
 
 
 # =============================================================
