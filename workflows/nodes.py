@@ -312,12 +312,19 @@ def build_agent_node(llm_with_tools, system_message_fn):
 
         has_calls = _has_tool_calls(response)
 
-        # Determine routing
+        # Determine routing based on plan intent and whether there are tool calls
         if has_calls:
             next_step = "tools"
         else:
-            # No more tool calls → route to reflection for assessment
-            next_step = "reflect"
+            # No tool calls → agent is done acting
+            plan_intent = state.get("plan", {}).get("intent", "analysis")
+            if plan_intent in ("simple", "data_query"):
+                # For simple/data queries, respond and finish — no need for
+                # full reflection + quality gate cycle
+                next_step = "end"
+            else:
+                # For full analysis, route to reflection for quality assessment
+                next_step = "reflect"
 
         return {
             "messages": [response],

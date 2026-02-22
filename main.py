@@ -189,7 +189,7 @@ class NotebookMMM:
             try:
                 for event in self._graph.stream(input_state, config):
                     step_count += 1
-                    if step_count > 40:
+                    if step_count > 25:
                         console.print("[yellow]⚠ Safety limit: max steps reached[/yellow]")
                         break
                     for node_name, node_data in event.items():
