@@ -512,12 +512,16 @@ def build_tool_node(registry: ToolRegistry, console=None):
 
             # Parse result for context updates and phase transitions
             try:
-                result_dict = json.loads(result_str)
+                if name.startswith("call_") and name.endswith("_agent"):
+                    # Dispatch tools return raw text, not JSON
+                    result_dict = {"success": True, "message": result_str}
+                else:
+                    result_dict = json.loads(result_str)
 
-                # ✅ FIX: Validate result is a dict
-                if not isinstance(result_dict, dict):
-                    logger.warning(f"Tool {name} returned non-dict result")
-                    result_dict = {"success": False, "error": "Invalid result format"}
+                    # ✅ FIX: Validate result is a dict
+                    if not isinstance(result_dict, dict):
+                        logger.warning(f"Tool {name} returned non-dict result")
+                        result_dict = {"success": False, "error": "Invalid result format"}
 
                 # ── Auto-extract context from tool results ──
                 _auto_update_context(name, args, result_dict, ctx)
