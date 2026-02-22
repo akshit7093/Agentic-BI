@@ -9,10 +9,21 @@ import traceback
 import uuid
 from typing import Any, Dict, Optional
 
-from rich.console import Console
-from rich.markdown import Markdown
-from rich.panel import Panel
-from rich.table import Table
+import re
+from tqdm.auto import tqdm
+
+def _clean_print(text):
+    # Strip basic rich markup tags
+    clean = re.sub(r'\[/?(?:bold|dim|italic|underline|strike|color|blink|reverse|red|green|yellow|blue|magenta|cyan|white|black)[^\]]*\]', '', text)
+    tqdm.write(clean)
+
+class BasicConsole:
+    def print(self, *args, **kwargs):
+        text = " ".join(str(a) for a in args)
+        _clean_print(text)
+    
+    def print_json(self, text, **kwargs):
+        _clean_print(text)
 
 from .core.mmm_engine import MMMEngine
 from .workflows.state import initial_state, Phase
@@ -31,7 +42,7 @@ except ImportError:
     SPARK_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
-console = Console(force_terminal=True)
+console = BasicConsole()
 
 
 # =============================================================
@@ -75,15 +86,15 @@ class NotebookMMM:
         spark=None,
     ):
         console.print(
-            "\n[bold blue]🤖 Agentic MMM System[/bold blue]\n"
-            "[dim]Intelligent Data Analyst & Marketing Mix Modelling Agent[/dim]\n"
+            "\n🤖 Agentic MMM System\n"
+            "Intelligent Data Analyst & Marketing Mix Modelling Agent\n"
         )
 
         self._spark = spark or (_get_spark() if SPARK_AVAILABLE else None)
         if self._spark:
-            console.print("[green]✅ Spark session active[/green]")
+            console.print("✅ Spark session active")
         else:
-            console.print("[yellow]⚠ Spark unavailable — CSV/local mode only[/yellow]")
+            console.print("⚠ Spark unavailable — CSV/local mode only")
 
         self.engine = MMMEngine(self._spark)
         self._table = table
@@ -103,16 +114,16 @@ class NotebookMMM:
 
     def load(self, path: str) -> bool:
         """Load data directly (no agent)."""
-        console.print(f"Loading: [cyan]{path}[/cyan]")
+        console.print(f"Loading: {path}")
         res = self.engine.load_data(path)
         if res["success"]:
-            console.print(f"[green]✅ {res['rows']:,} rows × {len(res['columns'])} columns[/green]")
+            console.print(f"✅ {res['rows']:,} rows × {len(res['columns'])} columns")
             if res.get("potential_spend_columns"):
                 console.print(f"   💡 Spend columns detected: {res['potential_spend_columns']}")
             if res.get("potential_kpi_columns"):
                 console.print(f"   💡 KPI columns detected: {res['potential_kpi_columns']}")
             return True
-        console.print(f"[red]❌ Load failed: {res['error']}[/red]")
+        console.print(f"❌ Load failed: {res['error']}")
         return False
 
     def inspect(self) -> Dict[str, Any]:
@@ -125,15 +136,13 @@ class NotebookMMM:
         return res
 
     def _print_inspection(self, res: Dict[str, Any]) -> None:
-        tbl = Table(title="Dataset Profile", show_header=True)
-        tbl.add_column("Property", style="cyan")
-        tbl.add_column("Value")
-        tbl.add_row("Shape", f"{res['rows']:,} rows × {len(res['columns'])} cols")
-        tbl.add_row("Spend cols", str(res.get("potential_spend_columns", [])))
-        tbl.add_row("KPI cols", str(res.get("potential_kpi_columns", [])))
-        tbl.add_row("Time col", str(res.get("time_column")))
-        tbl.add_row("Nulls (any)", str(any(v > 0 for v in res.get("null_pct", {}).values())))
-        console.print(tbl)
+        console.print("\n--- Dataset Profile ---")
+        console.print(f"Shape:      {res['rows']:,} rows × {len(res['columns'])} cols")
+        console.print(f"Spend cols: {res.get('potential_spend_columns', [])}")
+        console.print(f"KPI cols:   {res.get('potential_kpi_columns', [])}")
+        console.print(f"Time col:   {res.get('time_column')}")
+        console.print(f"Nulls(any): {any(v > 0 for v in res.get('null_pct', {}).values())}")
+        console.print("-----------------------\n")
 
     # ─────────────────────────────────────────────
     # AGENT OPERATIONS
@@ -189,39 +198,41 @@ class NotebookMMM:
         max_tool_calls = 50  # default for analysis
 
         try:
-            for event in self._graph.stream(input_state, config):
-                for node_name, node_data in event.items():
+            with tqdm(desc="Agent Steps", unit="step", dynamic_ncols=True) as pbar:
+                for event in self._graph.stream(input_state, config):
+                    pbar.update(1)
+                    for node_name, node_data in event.items():
 
-                    # After planner runs, set intent-based tool limit
-                    if node_name == "planner" and "plan" in node_data:
-                        intent = node_data["plan"].get("intent", "analysis")
-                        max_tool_calls = {
-                            "simple": 5,
-                            "data_query": 15,
-                            "analysis": 50,
-                        }.get(intent, 50)
+                        # After planner runs, set intent-based tool limit
+                        if node_name == "planner" and "plan" in node_data:
+                            intent = node_data["plan"].get("intent", "analysis")
+                            max_tool_calls = {
+                                "simple": 5,
+                                "data_query": 15,
+                                "analysis": 50,
+                            }.get(intent, 50)
 
-                    # Count only actual tool executions
-                    if node_name == "tools":
-                        tool_call_count += 1
-                        if tool_call_count > max_tool_calls:
-                            console.print(
-                                f"[yellow]⚠ Safety limit: {max_tool_calls} "
-                                f"tool calls reached for intent '{intent}'[/yellow]"
-                            )
-                            break
+                        # Count only actual tool executions
+                        if node_name == "tools":
+                            tool_call_count += 1
+                            if tool_call_count > max_tool_calls:
+                                console.print(
+                                    f"⚠ Safety limit: {max_tool_calls} "
+                                    f"tool calls reached for intent '{intent}'"
+                                )
+                                break
 
-                    if node_name == "agent" and "messages" in node_data:
-                        msgs = node_data["messages"]
-                        if msgs:
-                            msg = msgs[-1]
-                            if isinstance(msg, AIMessage) and msg.content:
-                                tc = getattr(msg, "tool_calls", None)
-                                if not tc:
-                                    final_response = str(msg.content)
-                else:
-                    continue  # inner loop didn't break
-                break  # inner loop broke → stop outer loop too
+                        if node_name == "agent" and "messages" in node_data:
+                            msgs = node_data["messages"]
+                            if msgs:
+                                msg = msgs[-1]
+                                if isinstance(msg, AIMessage) and msg.content:
+                                    tc = getattr(msg, "tool_calls", None)
+                                    if not tc:
+                                        final_response = str(msg.content)
+                    else:
+                        continue  # inner loop didn't break
+                    break  # inner loop broke → stop outer loop too
         except Exception as exc:
             traceback.print_exc()
             final_response = f"⚠ Agent error: {exc}"
@@ -253,7 +264,7 @@ class NotebookMMM:
             pass
 
         output = final_response or "(No text response generated — see tool outputs above)"
-        console.print(Panel(Markdown(output), title="[bold blue]🤖 Agent[/bold blue]", border_style="blue"))
+        console.print(f"\n🤖 Agent:\n{output}\n")
         return output
 
     # ─────────────────────────────────────────────
@@ -301,14 +312,14 @@ class NotebookMMM:
         self._ensure_agent()
 
         console.print(
-            "\n[bold magenta]────────── Chat Mode ──────────[/bold magenta]\n"
-            "🗨️  [bold magenta]Interactive MMM Agent Chat[/bold magenta]\n\n"
-            "[dim]Try:\n"
+            "\n────────── Chat Mode ──────────\n"
+            "🗨️  Interactive MMM Agent Chat\n\n"
+            "Try:\n"
             " - 'Show me basic analytics'\n"
             " - 'Which channels drive the most sales?'\n"
             " - 'Run an OLS model'\n"
-            "Type 'exit' to quit.[/dim]\n"
-            "[bold magenta]─────────────────────────────────[/bold magenta]\n"
+            "Type 'exit' to quit.\n"
+            "─────────────────────────────────\n"
         )
 
         thread_id = str(uuid.uuid4())
@@ -408,17 +419,14 @@ def tool_fn(column):
     def list_tools(self) -> None:
         """Print all available tools."""
         if not self._registry:
-            console.print("[yellow]Agent not yet initialised — call ask() or chat() first[/yellow]")
+            console.print("Agent not yet initialised — call ask() or chat() first")
             return
         tools = self._registry.list_tools()
-        tbl = Table(title=f"Available Tools ({len(tools)})")
-        tbl.add_column("Name", style="bold cyan")
-        tbl.add_column("Type")
-        tbl.add_column("Description")
+        console.print(f"\n--- Available Tools ({len(tools)}) ---")
         for t in tools:
-            kind = "[green]custom[/green]" if t.get("dynamic") else "built-in"
-            tbl.add_row(t["name"], kind, t["description"][:80])
-        console.print(tbl)
+            kind = "custom" if t.get("dynamic") else "built-in"
+            console.print(f"{t['name'].ljust(30)} | {kind.ljust(10)} | {t['description'][:80]}")
+        console.print("--------------------------------")
 
 
 # =============================================================
