@@ -95,8 +95,8 @@ def apply_transforms(
 
         # Saturation
         if saturation_fn == "hill":
-            hs = half_sat_map.get(col, max(float(arr.mean()), 1e-5))
-            sl = slope_map.get(col, 1.0)
+            hs = half_sat_map.get(col) or max(float(arr.mean()), 1e-5)
+            sl = slope_map.get(col) or 1.0
             arr = hill_transform(arr, hs, sl)
         elif saturation_fn == "log":
             arr = log_saturation(arr)

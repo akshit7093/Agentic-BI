@@ -108,7 +108,7 @@ def build_agent(
         return build_system_message(state, engine)
 
     # 5. Build nodes
-    planner_node     = build_planner_node(llm, system_message_fn)
+    planner_node     = build_planner_node(llm, system_message_fn, registry=registry)
     agent_node       = build_agent_node(llm_with_tools, system_message_fn)
     tool_node        = build_tool_node(registry, console=console)
     reflection_node  = build_reflection_node(llm)

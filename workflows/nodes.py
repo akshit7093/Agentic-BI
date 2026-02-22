@@ -94,11 +94,14 @@ def _summarise_args(args: Dict[str, Any]) -> str:
 # 1. PLANNER NODE
 # ─────────────────────────────────────────────
 
-def build_planner_node(llm, system_message_fn):
+def build_planner_node(llm, system_message_fn, registry=None):
     """
     Creates a step-by-step plan for the current phase.
     The planner receives phase context, available tools, and any
     reflection feedback from a previous iteration.
+
+    Now accepts `registry` so it can inject the live tool list into the
+    planning prompt — new tools are automatically discovered.
     """
 
     def planner_node(state: AgentState) -> Dict[str, Any]:
@@ -109,16 +112,17 @@ def build_planner_node(llm, system_message_fn):
         reflection = state.get("reflection", {})
         iteration = state.get("iteration", 0)
 
-        # For simple interactive questions (not full analysis), skip planning
-        if state.get("interactive", True) and phase == Phase.IDLE.value:
-            return {
-                "messages": [],
-                "next_step": "agent",
-                "plan": empty_plan(),
-                "iteration": iteration,
-            }
+        # ── Build available tools list from registry ──
+        available_tools_block = ""
+        if registry:
+            tool_list = registry.list_tools()
+            tool_lines = [f"  - `{t['name']}`: {t['description']}" for t in tool_list]
+            available_tools_block = (
+                "\n## AVAILABLE TOOLS:\n"
+                + "\n".join(tool_lines)
+            )
 
-        # Build planning prompt
+        # Build reflection feedback if retrying
         reflection_feedback = ""
         if reflection.get("gaps"):
             reflection_feedback = (
@@ -131,25 +135,50 @@ def build_planner_node(llm, system_message_fn):
                 f"You MUST address these gaps in your revised plan."
             )
 
-        plan_prompt = f"""You are a STRATEGIC PLANNER for an MMM analysis agent.
+        # Get the user's latest message to understand intent
+        user_message = ""
+        for msg in reversed(state.get("messages", [])):
+            if hasattr(msg, "type") and msg.type == "human":
+                user_message = getattr(msg, "content", "")
+                break
+            elif hasattr(msg, "content") and isinstance(msg, HumanMessage):
+                user_message = msg.content
+                break
+
+        plan_prompt = f"""You are a STRATEGIC PLANNER for an intelligent data analysis agent.
 
 ## YOUR TASK:
-Create a detailed, step-by-step execution plan for the current analysis phase.
+Classify the user's intent and create an appropriate execution plan.
+
+## USER'S REQUEST: "{user_message}"
 
 ## CURRENT PHASE: {phase}
 ## ANALYSIS CONTEXT:
 - KPI Column: {ctx.get('kpi_col', 'Not set')}
 - Channel Columns: {ctx.get('channel_cols', [])}
 - Date Column: {ctx.get('date_col', 'Not set')}
+- Data Loaded: {bool(ctx.get('table_path'))}
 - Model R²: {ctx.get('r2', 'Not yet modelled')}
 - Findings so far: {len(ctx.get('findings', []))} logged
 - Iteration: {iteration}
 {reflection_feedback}
+{available_tools_block}
 
 ## INSTRUCTIONS:
-Respond with ONLY a JSON object (no extra text) in this exact format:
+First, classify the user's request:
+- **simple**: Greetings, yes/no questions, clarifications → 1 step plan (just respond)
+- **data_query**: Questions about the data → 1-3 step plan (inspect, query, respond)
+- **analysis**: "run MMM", "profile data", "full analysis" → 3-6 step plan
+
+**CRITICAL REASONING RULES:**
+1. If the user asks for modelling/MMM and column roles (KPI, channels) are not yet confirmed in the context, your plan MUST start with data inspection steps
+2. If column roles are ambiguous, include an `ask_user` step to confirm before modelling
+3. Never plan a modelling step using columns you haven't verified through data profiling
+
+Respond with ONLY a JSON object (no extra text):
 {{
-    "goal": "What this phase should accomplish",
+    "intent": "simple" or "data_query" or "analysis",
+    "goal": "What this plan should accomplish",
     "steps": [
         {{"action": "description of step", "tool": "tool_name_to_use", "expected_output": "what success looks like"}},
         ...
@@ -157,8 +186,8 @@ Respond with ONLY a JSON object (no extra text) in this exact format:
     "success_criteria": ["criterion 1", "criterion 2", ...]
 }}
 
-Keep the plan focused: 3-6 steps maximum for this phase.
-Only use tools that exist in the system (data tools, MMM tools, meta tools).
+Keep the plan focused: 1-6 steps based on complexity.
+Only use tools from the AVAILABLE TOOLS list above.
 """
 
         try:
@@ -166,9 +195,12 @@ Only use tools that exist in the system (data tools, MMM tools, meta tools).
             content = getattr(response, "content", "") or ""
             parsed = _parse_json_from_response(content)
 
+            intent = parsed.get("intent", "analysis")
+
             plan = {
                 "goal": parsed.get("goal", f"Complete {phase} phase"),
                 "current_phase": phase,
+                "intent": intent,
                 "steps": parsed.get("steps", []),
                 "success_criteria": parsed.get("success_criteria", []),
                 "current_step_idx": 0,
@@ -177,9 +209,9 @@ Only use tools that exist in the system (data tools, MMM tools, meta tools).
                 ),
             }
 
-            logger.info(f"[PLANNER] Phase={phase}, Steps={len(plan['steps'])}, Goal={plan['goal'][:80]}")
+            logger.info(f"[PLANNER] Phase={phase}, Intent={intent}, Steps={len(plan['steps'])}, Goal={plan['goal'][:80]}")
 
-            plan_summary = f"📋 **Plan for {phase}**: {plan['goal']}\n"
+            plan_summary = f"📋 **Plan** ({intent}): {plan['goal']}\n"
             for i, step in enumerate(plan.get("steps", []), 1):
                 plan_summary += f"  {i}. {step.get('action', '?')} → `{step.get('tool', '?')}`\n"
 
@@ -473,8 +505,8 @@ def build_reflection_node(llm):
         ctx = state.get("context", {})
         iteration = state.get("iteration", 0)
 
-        # For IDLE or interactive one-off questions, skip reflection
-        if phase == Phase.IDLE.value and state.get("interactive", True):
+        # For truly empty plans (no steps), skip reflection gracefully
+        if not plan.get("steps") and phase == Phase.IDLE.value:
             return {
                 "messages": [],
                 "next_step": "end",
