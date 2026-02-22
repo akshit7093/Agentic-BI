@@ -120,16 +120,24 @@ def build_meta_tools(registry: ToolRegistry, engine: MMMEngine) -> List[Structur
 
     def ask_user_for_input(question: str, options: Optional[str] = None) -> str:
         """Ask user a question and return their response (blocking)."""
-        import sys
+        from rich.prompt import Prompt, Confirm
+        from rich.console import Console
         
-        print(f"\n🤖 Agent needs clarification: {question}", flush=True)
+        # We need a dedicated console to ensure we don't conflict with existing Live displays
+        msg_console = Console()
+        
+        msg_console.print(f"\n[bold yellow]🤖 Agent needs clarification:[/bold yellow] {question}")
         
         if options:
             opt_list = [o.strip() for o in options.split(",")]
             for i, o in enumerate(opt_list, 1):
-                print(f"   {i}. {o}", flush=True)
+                msg_console.print(f"   [cyan]{i}.[/cyan] {o}")
             
-            user_in = input("\nYour choice (number or text): ").strip()
+            # Use Rich Prompt
+            user_in = Prompt.ask(
+                "[bold cyan]Your choice (number or text)[/bold cyan]", 
+                console=msg_console
+            ).strip()
             
             # If numeric, map to option
             try:
@@ -139,7 +147,7 @@ def build_meta_tools(registry: ToolRegistry, engine: MMMEngine) -> List[Structur
             except ValueError:
                 pass
         else:
-            user_in = input("\nYour answer: ").strip()
+            user_in = Prompt.ask("[bold cyan]Your answer[/bold cyan]", console=msg_console).strip()
             
         return _j({"success": True, "question": question, "user_response": user_in})
 

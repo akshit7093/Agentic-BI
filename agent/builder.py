@@ -81,12 +81,13 @@ def _build_tool_registry(engine: MMMEngine, llm=None) -> ToolRegistry:
 
 def _init_llm(endpoint: str, temperature: float, max_tokens: int):
     """Initialize the Databricks-hosted LLM."""
-    from databricks_langchain import ChatDatabricks
+    from langchain_databricks import ChatDatabricks
 
     return ChatDatabricks(
         endpoint=endpoint,
         temperature=temperature,
         max_tokens=max_tokens,
+        max_retries=10,  # Handle Databricks 429 QPS and token limit errors natively
     )
 
 

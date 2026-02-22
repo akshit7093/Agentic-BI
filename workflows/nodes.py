@@ -546,9 +546,8 @@ def build_tool_node(registry: ToolRegistry, console=None):
                 result_dict = {"success": False, "error": f"Parse error: {str(e)}"}
                 error_recovery["consecutive_failures"] = error_recovery.get("consecutive_failures", 0) + 1
 
-            # Sub-agents return markdown/text, allow longer display. Raw tools return JSON, keep short.
-            max_len = 4000 if name.startswith("call_") and name.endswith("_agent") else 300
-            display = result_str[:max_len] + "…" if len(result_str) > max_len else result_str
+            # Let rich handle wrapping instead of truncating at 300 characters
+            display = result_str
             _log_message(console, f"  ↩  {display}", "info")
 
             tool_results.append(

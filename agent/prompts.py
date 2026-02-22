@@ -21,75 +21,59 @@ if TYPE_CHECKING:
 _PHASE_GUIDANCE: dict[str, str] = {
     Phase.IDLE.value: """
 ### Current Phase: IDLE
-Your first action should be to call `get_data_status()` to check if data is already loaded.
+Your first action should be to use `call_data_agent(task="Call get_data_status to check if data is loaded")`.
 If not loaded, ask the user for the table path or CSV file location.
 """,
     Phase.DATA_LOADING.value: """
 ### Current Phase: DATA LOADING
-- Call `load_data(path)` with the provided path
-- After loading, immediately call `inspect_data()` to profile the dataset
+- Use `call_data_agent(task="Load data from [path] and then inspect it")`
 - Check for: datetime columns, spend columns, KPI columns
-- If the data is transactional (rows = orders/events), consider `aggregate_weekly()`
 """,
     Phase.DATA_PROFILING.value: """
 ### Current Phase: DATA PROFILING
 Goals in this phase:
-1. `inspect_data()` — get full schema and statistics
-2. `get_correlation_matrix()` — understand relationships between columns
-3. `detect_outliers()` on KPI and key numeric columns
-4. Log your findings with `add_analysis_note()`
-5. Ask user clarifying questions via `ask_user()` if column roles are ambiguous
+1. `call_data_agent(task="Profile the dataset, inspect schema, column stats, and get correlation matrix")`
+2. Log your findings with `add_analysis_note()`
+3. Ask user clarifying questions via `ask_user()` if column roles are ambiguous
 """,
     Phase.DATA_VALIDATION.value: """
 ### Current Phase: DATA VALIDATION
-- Check for nulls, duplicates, and data quality issues
-- Use `clean_data()` if needed
-- Verify time-series continuity (no gaps) if datetime column exists
+- Use `call_data_agent(task="Check for nulls, duplicates, data quality issues, and verify time-series continuity")`
 - Confirm with user the KPI column and channel/spend columns to use
 - Use `ask_user_to_choose()` for column selection if ambiguous
 """,
     Phase.FEATURE_ENG.value: """
 ### Current Phase: FEATURE ENGINEERING
-- If raw transactions: `aggregate_weekly(date_col, value_cols)` to create spend time series
-- Add time features: `add_time_features(date_col)`
-- Create custom engineered features with `create_custom_tool()` if needed
-- Normalise or transform columns using `execute_query()`
+- Use `call_data_agent(task="Aggregate data to weekly and add time features based on datetime column")`
+- Use `create_custom_tool()` if needed for specialized feature engineering
 """,
     Phase.ADSTOCK_OPT.value: """
 ### Current Phase: ADSTOCK PARAMETER OPTIMISATION
-- Call `optimize_adstock_parameters(channel_col, kpi_col)` for EACH channel
-- OR use `optimize_all_adstock_parameters(channel_cols, kpi_col)` for efficiency
+- Use `call_mmm_agent(task="Optimize Adstock parameters for all channel columns")`
 - Review parameters (decay, half_sat, slope) — higher decay = longer carryover
 - Log recommendations with `add_analysis_note()`
 """,
     Phase.MODELING.value: """
 ### Current Phase: MODELING
-- For quick results: `run_ols_mmm(kpi_col, channel_cols)`
-- For uncertainty quantification: `run_bayesian_mmm(kpi_col, channel_cols)`
-- You can run MULTIPLE iterations with different channel combinations
-- After each model: call `roi_summary()` and log findings
-- If R² < 0.5, investigate why — check for missing channels, multicollinearity
+- Use `call_mmm_agent(task="Run OLS or Bayesian MMM using the identified KPI and Channel columns")`
+- After each model: check ROI summary and log findings
+- If R² < 0.5, investigate why — use `call_analytics_agent` or refine features
 """,
     Phase.EVALUATION.value: """
 ### Current Phase: MODEL EVALUATION
-- Review `roi_summary()` results
-- Compare ROI across channels — which has highest return?
-- Check model R² — is it acceptable?
-- If model quality is poor, consider: different channels, adstock re-optimisation, feature engineering
+- Use `call_analytics_agent(task="Evaluate the model quality, check ROI summary, and compare channel impacts")`
 - Ask user if they want to iterate or proceed to budget optimisation
 """,
     Phase.BUDGET_OPT.value: """
 ### Current Phase: BUDGET OPTIMISATION
-- Call `optimize_budget(total_budget, channel_cols)`
-- Run `simulate_scenario()` for custom scenarios the user might propose
-- Use `compare_scenarios()` to evaluate alternatives
-- Present results with clear business interpretation
+- Use `call_analytics_agent(task="Run budget optimization for total_budget across channels")`
+- Run custom scenarios the user might propose
 """,
     Phase.REPORTING.value: """
 ### Current Phase: REPORTING
-- Summarise all key findings using the analysis history
+- Summarise all key findings using the analysis history (`get_analysis_history`)
 - Present: data quality findings, model R², ROI rankings, budget recommendations
-- Highlight top 3 actionable insights
+- Highlight top actionable insights
 - Ask user if they want to explore further scenarios or iterate
 """,
 }

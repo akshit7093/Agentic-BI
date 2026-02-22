@@ -24,6 +24,6 @@ setup(
         "statsmodels",
         "pymc",
         "pydantic",
-        "tqdm"
+        "rich"
     ],
 )
