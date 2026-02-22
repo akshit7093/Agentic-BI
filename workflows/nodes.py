@@ -404,6 +404,8 @@ def build_agent_node(llm_with_tools, system_message_fn, console=None):
         # Determine routing based on plan intent and whether there are tool calls
         if has_calls:
             next_step = "tools"
+            call_names = [c["name"] for c in _extract_tool_calls(response)]
+            logger.info(f"[AGENT] iter={iteration} → tools: {call_names}")
         else:
             # No tool calls → agent is done acting
             plan_intent = plan.get("intent", "analysis")
@@ -414,6 +416,7 @@ def build_agent_node(llm_with_tools, system_message_fn, console=None):
             else:
                 # For full analysis, route to reflection for quality assessment
                 next_step = "reflect"
+            logger.info(f"[AGENT] iter={iteration} → {next_step} (intent={plan_intent}, no tool calls)")
 
         # Increment iteration consistently
         new_iteration = iteration + 1
@@ -474,6 +477,8 @@ def build_tool_node(registry: ToolRegistry, console=None):
 
         tool_results: List[ToolMessage] = []
 
+        logger.info(f"[TOOLS] Executing {len(tool_calls)} tool call(s): {[c['name'] for c in tool_calls]}")
+
         for call in tool_calls:
             name = call["name"]
             args = call["args"]
@@ -503,6 +508,7 @@ def build_tool_node(registry: ToolRegistry, console=None):
                 continue
 
             result_str = registry.invoke(name, args)
+            logger.debug(f"[TOOLS] {name} returned {len(result_str)} chars")
 
             # Parse result for context updates and phase transitions
             try:
