@@ -24,7 +24,7 @@ from ..tools.registry import ToolRegistry
 # ─────────────────────────────────────────────
 # CONFIGURATION CONSTANTS (was hardcoded magic numbers)
 # ─────────────────────────────────────────────
-MAX_ITERATIONS = 40
+MAX_ITERATIONS = 100
 MAX_MESSAGES_KEEP = 50
 MAX_RETRIES = 3
 REFLECTION_MESSAGE_WINDOW = 15
