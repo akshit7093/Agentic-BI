@@ -28,15 +28,6 @@ class GetAdstockRecsInput(BaseModel):
 class ColumnStatsInput(BaseModel):
     column: str = Field(description="Column name to analyse")
 
-class TopValuesInput(BaseModel):
-    column: str = Field(description="Column to rank")
-    n: int = Field(default=10, description="Number of rows to return")
-    ascending: bool = Field(default=False, description="True = lowest first")
-    group_by: Optional[str] = Field(default=None, description="Group by this column before ranking")
-    agg: str = Field(default="sum", description="Aggregation: sum | mean | count | max | min")
-
-class SampleRowsInput(BaseModel):
-    n: int = Field(default=10, description="Number of sample rows")
 
 class FilterAggInput(BaseModel):
     column: str = Field(description="Column to aggregate")
@@ -88,20 +79,6 @@ def build_data_tools(engine: MMMEngine) -> List[StructuredTool]:
     def get_adstock_recs() -> str:
         return _j(engine.get_adstock_recommendations())
 
-    def column_stats(column: str) -> str:
-        return _j(engine.get_column_stats(column.strip()))
-
-    def top_values(
-        column: str,
-        n: int = 10,
-        ascending: bool = False,
-        group_by: Optional[str] = None,
-        agg: str = "sum",
-    ) -> str:
-        return _j(engine.get_top_values(column.strip(), int(n), ascending, group_by, agg))
-
-    def sample_rows(n: int = 10) -> str:
-        return _j(engine.sample_rows(int(n)))
 
     def filter_agg(
         column: str,
@@ -112,13 +89,9 @@ def build_data_tools(engine: MMMEngine) -> List[StructuredTool]:
     ) -> str:
         return _j(engine.filter_and_aggregate(column.strip(), agg, filter_col, filter_val, group_by))
 
-    def get_correlation(columns: Optional[str] = None) -> str:
-        cols = [c.strip() for c in columns.split(",")] if columns else None
-        return _j(engine.get_correlation_matrix(cols))
 
     def detect_outliers(column: str, method: str = "iqr") -> str:
         return _j(engine.detect_outliers(column.strip(), method))
-
     def execute_query(code: str) -> str:
         return _j(engine.execute_custom_query(code))
 
@@ -173,36 +146,14 @@ def build_data_tools(engine: MMMEngine) -> List[StructuredTool]:
                 "Includes warnings about data suitability (time series, row count, etc.)."
             ),
         ),
-        StructuredTool(
-            name="get_column_stats",
-            func=column_stats,
-            args_schema=ColumnStatsInput,
-            description="Get detailed statistics for a single column (mean, std, skew, top values, nulls).",
-        ),
-        StructuredTool(
-            name="get_top_values",
-            func=top_values,
-            args_schema=TopValuesInput,
-            description="Get top/bottom N values for a column with optional grouping and aggregation.",
-        ),
-        StructuredTool(
-            name="sample_rows",
-            func=sample_rows,
-            args_schema=SampleRowsInput,
-            description="Get a random sample of rows from the loaded dataset.",
-        ),
+
         StructuredTool(
             name="filter_aggregate",
             func=filter_agg,
             args_schema=FilterAggInput,
             description="Filter dataset and aggregate a column, with optional grouping.",
         ),
-        StructuredTool(
-            name="get_correlation_matrix",
-            func=get_correlation,
-            args_schema=CorrelationInput,
-            description="Compute Pearson correlation matrix for numeric columns.",
-        ),
+
         StructuredTool(
             name="detect_outliers",
             func=detect_outliers,

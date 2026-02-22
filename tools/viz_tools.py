@@ -20,10 +20,6 @@ logger = logging.getLogger(__name__)
 
 # ─── Input schemas ────────────────────────────────────────────
 
-class CorrelationHeatmapInput(BaseModel):
-    columns: Optional[str] = Field(default=None, description="Comma-separated columns (empty=all numeric)")
-    title: str = Field(default="Correlation Heatmap", description="Chart title")
-
 
 class FeatureImportanceChartInput(BaseModel):
     target_col: str = Field(description="Target column to analyze")
@@ -36,16 +32,6 @@ class TimeSeriesPlotInput(BaseModel):
     date_col: str = Field(description="Date column for x-axis")
     title: str = Field(default="Time Series", description="Chart title")
 
-
-class DistributionPlotInput(BaseModel):
-    columns: str = Field(description="Comma-separated columns to plot distributions for")
-    title: str = Field(default="Distribution Analysis", description="Chart title")
-
-
-class ScatterMatrixInput(BaseModel):
-    columns: str = Field(description="Comma-separated columns for scatter matrix")
-    color_col: Optional[str] = Field(default=None, description="Column to color by (categorical)")
-    title: str = Field(default="Scatter Matrix", description="Chart title")
 
 
 class ModelComparisonChartInput(BaseModel):
@@ -97,61 +83,6 @@ def build_viz_tools(engine: MMMEngine) -> list:
 
         return path
 
-    # ─── 1. Correlation Heatmap ──────────────────────
-
-    def plot_correlation_heatmap(
-        columns: Optional[str] = None,
-        title: str = "Correlation Heatmap",
-    ) -> str:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        df = _get_df()
-        cols = _numeric_cols(df, columns)
-        if len(cols) < 2:
-            return _j({"error": "Need at least 2 numeric columns"})
-
-        corr = df[cols].corr()
-
-        fig, ax = plt.subplots(figsize=(max(8, len(cols) * 0.8), max(6, len(cols) * 0.6)))
-        im = ax.imshow(corr.values, cmap="RdBu_r", vmin=-1, vmax=1, aspect="auto")
-
-        ax.set_xticks(range(len(cols)))
-        ax.set_yticks(range(len(cols)))
-        ax.set_xticklabels(cols, rotation=45, ha="right", fontsize=9)
-        ax.set_yticklabels(cols, fontsize=9)
-
-        # Add correlation values
-        for i in range(len(cols)):
-            for j in range(len(cols)):
-                val = corr.values[i, j]
-                color = "white" if abs(val) > 0.6 else "black"
-                ax.text(j, i, f"{val:.2f}", ha="center", va="center", fontsize=8, color=color)
-
-        fig.colorbar(im, ax=ax, shrink=0.8)
-        ax.set_title(title, fontsize=14, fontweight="bold")
-        fig.tight_layout()
-
-        path = _save_fig(fig, "correlation_heatmap")
-        plt.close(fig)
-
-        # Find strongest correlations
-        strong = []
-        for i in range(len(cols)):
-            for j in range(i + 1, len(cols)):
-                val = abs(corr.values[i, j])
-                if val > 0.5:
-                    strong.append({"pair": f"{cols[i]} ↔ {cols[j]}", "correlation": round(float(corr.values[i, j]), 3)})
-        strong.sort(key=lambda x: abs(x["correlation"]), reverse=True)
-
-        return _j({
-            "chart": "correlation_heatmap",
-            "saved_to": path,
-            "displayed": True,
-            "strong_correlations": strong[:10],
-            "n_columns": len(cols),
-        })
 
     # ─── 2. Feature Importance Chart ─────────────────
 
@@ -295,120 +226,6 @@ def build_viz_tools(engine: MMMEngine) -> list:
             "n_data_points": len(df),
         })
 
-    # ─── 4. Distribution Plot ────────────────────────
-
-    def plot_distributions(
-        columns: str,
-        title: str = "Distribution Analysis",
-    ) -> str:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        df = _get_df()
-        cols = [c.strip() for c in columns.split(",") if c.strip() in df.columns]
-
-        if not cols:
-            return _j({"error": "No valid columns"})
-
-        n = len(cols)
-        n_rows = (n + 2) // 3
-        fig, axes = plt.subplots(n_rows, min(n, 3), figsize=(5 * min(n, 3), 4 * n_rows))
-        if n == 1:
-            axes = np.array([axes])
-        axes = axes.flatten()
-
-        stats = {}
-        for i, col in enumerate(cols):
-            if i >= len(axes):
-                break
-            ax = axes[i]
-            data = df[col].dropna()
-            ax.hist(data, bins=min(30, len(data) // 3 + 1), color="steelblue", alpha=0.7, edgecolor="white")
-            ax.axvline(data.mean(), color="red", linestyle="--", label=f"Mean: {data.mean():.2f}")
-            ax.axvline(data.median(), color="green", linestyle="--", label=f"Median: {data.median():.2f}")
-            ax.set_title(col, fontsize=11, fontweight="bold")
-            ax.legend(fontsize=8)
-            ax.grid(True, alpha=0.3)
-
-            stats[col] = {
-                "mean": round(float(data.mean()), 2),
-                "median": round(float(data.median()), 2),
-                "std": round(float(data.std()), 2),
-                "skewness": round(float(data.skew()), 3),
-                "kurtosis": round(float(data.kurtosis()), 3),
-            }
-
-        # Hide unused axes
-        for j in range(len(cols), len(axes)):
-            axes[j].set_visible(False)
-
-        fig.suptitle(title, fontsize=14, fontweight="bold")
-        fig.tight_layout()
-
-        path = _save_fig(fig, "distributions")
-        plt.close(fig)
-
-        return _j({
-            "chart": "distribution_analysis",
-            "saved_to": path,
-            "displayed": True,
-            "column_stats": stats,
-        })
-
-    # ─── 5. Scatter Matrix ──────────────────────────
-
-    def plot_scatter_matrix(
-        columns: str,
-        color_col: Optional[str] = None,
-        title: str = "Scatter Matrix",
-    ) -> str:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        df = _get_df().dropna()
-        cols = [c.strip() for c in columns.split(",") if c.strip() in df.columns]
-
-        if len(cols) < 2:
-            return _j({"error": "Need at least 2 columns"})
-
-        # Limit to 6 columns max for readability
-        cols = cols[:6]
-        n = len(cols)
-        fig, axes = plt.subplots(n, n, figsize=(3 * n, 3 * n))
-
-        for i in range(n):
-            for j in range(n):
-                ax = axes[i][j] if n > 1 else axes
-                if i == j:
-                    ax.hist(df[cols[i]], bins=20, color="steelblue", alpha=0.7, edgecolor="white")
-                else:
-                    ax.scatter(df[cols[j]], df[cols[i]], alpha=0.4, s=10, color="steelblue")
-                    # Add correlation
-                    corr = df[cols[i]].corr(df[cols[j]])
-                    ax.annotate(f"r={corr:.2f}", xy=(0.05, 0.95), xycoords="axes fraction",
-                                fontsize=8, va="top", fontweight="bold",
-                                color="red" if abs(corr) > 0.5 else "grey")
-
-                if j == 0:
-                    ax.set_ylabel(cols[i], fontsize=9)
-                if i == n - 1:
-                    ax.set_xlabel(cols[j], fontsize=9)
-
-        fig.suptitle(title, fontsize=14, fontweight="bold", y=1.02)
-        fig.tight_layout()
-
-        path = _save_fig(fig, "scatter_matrix")
-        plt.close(fig)
-
-        return _j({
-            "chart": "scatter_matrix",
-            "saved_to": path,
-            "displayed": True,
-            "columns": cols,
-            "n_pairs": n * (n - 1) // 2,
-        })
 
     # ─── 6. Model Comparison Chart ──────────────────
 
@@ -514,15 +331,7 @@ def build_viz_tools(engine: MMMEngine) -> list:
     # ─────────────────────────────────────────────
 
     tools = [
-        StructuredTool.from_function(
-            func=plot_correlation_heatmap,
-            name="plot_correlation_heatmap",
-            description=(
-                "Generate a correlation heatmap with annotated values. "
-                "Highlights strongly correlated column pairs. Returns the chart as an image."
-            ),
-            args_schema=CorrelationHeatmapInput,
-        ),
+
         StructuredTool.from_function(
             func=plot_feature_importance,
             name="plot_feature_importance",
@@ -542,24 +351,7 @@ def build_viz_tools(engine: MMMEngine) -> list:
             ),
             args_schema=TimeSeriesPlotInput,
         ),
-        StructuredTool.from_function(
-            func=plot_distributions,
-            name="plot_distributions",
-            description=(
-                "Plot histograms for multiple columns with mean/median lines. "
-                "Includes skewness and kurtosis statistics. Good for understanding data shape."
-            ),
-            args_schema=DistributionPlotInput,
-        ),
-        StructuredTool.from_function(
-            func=plot_scatter_matrix,
-            name="plot_scatter_matrix",
-            description=(
-                "Generate a scatter plot matrix for pairwise column relationships. "
-                "Shows histograms on diagonal and scatter + correlation on off-diagonal."
-            ),
-            args_schema=ScatterMatrixInput,
-        ),
+
         StructuredTool.from_function(
             func=plot_model_comparison,
             name="plot_model_comparison",

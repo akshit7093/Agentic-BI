@@ -36,14 +36,10 @@ class CreateCustomToolInput(BaseModel):
     )
     tags: str = Field(default="", description="Comma-separated tags for discovery")
 
-class ListCustomToolsInput(BaseModel):
-    pass
 
 class RemoveCustomToolInput(BaseModel):
     name: str = Field(description="Name of the custom tool to remove")
 
-class InspectCustomToolInput(BaseModel):
-    name: str = Field(description="Name of the custom tool to inspect")
 
 class UserFeedbackToolInput(BaseModel):
     question: str = Field(description="Question or clarification to present to the user")
@@ -52,9 +48,6 @@ class UserFeedbackToolInput(BaseModel):
         description="Optional comma-separated options (e.g. 'Yes,No,Maybe')",
     )
 
-class AskUserToChooseInput(BaseModel):
-    question: str = Field(description="The choice question")
-    choices: str = Field(description="Comma-separated options (e.g. 'OLS,Bayesian,Both')")
 
 class AddAnalysisNoteInput(BaseModel):
     note: str = Field(description="Insight, finding or hypothesis to record in analysis log")
@@ -97,27 +90,11 @@ def build_meta_tools(registry: ToolRegistry, engine: MMMEngine) -> List[Structur
         result = registry.register_from_spec(spec, extra_globals=extra)
         return _j(result)
 
-    def list_custom_tools() -> str:
-        all_tools = registry.list_tools()
-        custom = [t for t in all_tools if t.get("dynamic")]
-        return _j({"success": True, "custom_tools": custom, "total_tools": len(all_tools)})
 
     def remove_custom_tool(name: str) -> str:
         removed = registry.remove(name.strip())
         return _j({"success": removed, "removed_tool": name if removed else None})
 
-    def inspect_custom_tool(name: str) -> str:
-        spec = registry._specs.get(name.strip())
-        if not spec:
-            return _j({"success": False, "error": f"No custom tool named '{name}'."})
-        return _j({
-            "success": True,
-            "name": spec.name,
-            "description": spec.description,
-            "params": spec.params,
-            "tags": spec.tags,
-            "code": spec.code,
-        })
 
     # ── User interaction ──
 
@@ -150,8 +127,6 @@ def build_meta_tools(registry: ToolRegistry, engine: MMMEngine) -> List[Structur
         safe_print(f"{'='*60}")
         return _j({"success": True, "question": question, "user_response": user_in})
 
-    def ask_user_to_choose(question: str, choices: str) -> str:
-        return ask_user_for_input(question, options=choices)
 
     # ── Analysis logging ──
 
@@ -164,15 +139,6 @@ def build_meta_tools(registry: ToolRegistry, engine: MMMEngine) -> List[Structur
         engine.analysis_history.append(entry)
         return _j({"success": True, "logged": entry, "total_notes": len(engine.analysis_history)})
 
-    def get_analysis_history() -> str:
-        return _j({
-            "success": True,
-            "iterations": len(engine.analysis_history),
-            "history": engine.analysis_history[-20:],  # last 20 entries
-        })
-
-    def list_all_tools() -> str:
-        return _j({"success": True, "tools": registry.list_tools()})
 
     return [
         StructuredTool(
@@ -186,18 +152,7 @@ def build_meta_tools(registry: ToolRegistry, engine: MMMEngine) -> List[Structur
                 "The code has access to: df (dataframe), engine, pd, np, json, scipy, sklearn."
             ),
         ),
-        StructuredTool(
-            name="list_custom_tools",
-            func=list_custom_tools,
-            args_schema=ListCustomToolsInput,
-            description="List all dynamically-created custom tools.",
-        ),
-        StructuredTool(
-            name="inspect_custom_tool",
-            func=inspect_custom_tool,
-            args_schema=InspectCustomToolInput,
-            description="View the source code and parameters of a custom tool.",
-        ),
+
         StructuredTool(
             name="remove_custom_tool",
             func=remove_custom_tool,
@@ -214,15 +169,7 @@ def build_meta_tools(registry: ToolRegistry, engine: MMMEngine) -> List[Structur
                 "(e.g., which KPI to use, confirm an expensive operation)."
             ),
         ),
-        StructuredTool(
-            name="ask_user_to_choose",
-            func=ask_user_to_choose,
-            args_schema=AskUserToChooseInput,
-            description=(
-                "Present multiple choices to the user and get their selection. "
-                "Ideal for model selection, column disambiguation, or strategy decisions."
-            ),
-        ),
+
         StructuredTool(
             name="add_analysis_note",
             func=add_analysis_note,
@@ -231,17 +178,5 @@ def build_meta_tools(registry: ToolRegistry, engine: MMMEngine) -> List[Structur
                 "Log an insight, finding, warning, or hypothesis to the analysis history. "
                 "Use this to track what you've discovered and what to investigate next."
             ),
-        ),
-        StructuredTool(
-            name="get_analysis_history",
-            func=get_analysis_history,
-            args_schema=type("_In", (BaseModel,), {}),
-            description="Retrieve the full analysis history including logged notes and query records.",
-        ),
-        StructuredTool(
-            name="list_all_tools",
-            func=list_all_tools,
-            args_schema=type("_In", (BaseModel,), {}),
-            description="List ALL available tools (built-in + custom) with their descriptions.",
         ),
     ]
