@@ -7,9 +7,7 @@ import logging
 import os
 import traceback
 import uuid
-from datetime import datetime
-from typing import Any, Dict, List, Optional
-from yaspin import yaspin
+from typing import Any, Dict, Optional
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -190,7 +188,7 @@ class NotebookMMM:
         # Default high limit; planner output refines it
         max_tool_calls = 50  # default for analysis
 
-        with yaspin(text="Agent working…", color="green") as spinner:
+        with console.status("[bold green]Agent working…[/bold green]"):
             try:
                 for event in self._graph.stream(input_state, config):
                     for node_name, node_data in event.items():
