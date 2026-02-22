@@ -164,8 +164,11 @@ class MMMEngine:
             kpi = kpi_cols[0]
             if kpi in df.columns:
                 try:
-                    corr = df[num_cols].corrwith(df[kpi]).drop(index=kpi, errors="ignore")
-                    correlations = corr.round(4).to_dict()
+                    import warnings
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", RuntimeWarning)
+                        corr = df[num_cols].corrwith(df[kpi]).drop(index=kpi, errors="ignore")
+                        correlations = corr.round(4).to_dict()
                 except Exception:
                     pass
 
@@ -343,7 +346,12 @@ class MMMEngine:
             num = num[cols]
         if num.empty:
             return {"success": False, "error": "No numeric columns to correlate."}
-        corr = num.corr().round(4)
+        
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            corr = num.corr().round(4)
+            
         return {"success": True, "matrix": corr.to_dict(), "columns": list(corr.columns)}
 
     def detect_outliers(self, column: str, method: str = "iqr") -> Dict[str, Any]:

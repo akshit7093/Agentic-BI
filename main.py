@@ -74,10 +74,10 @@ class NotebookMMM:
         auto_load: bool = True,
         spark=None,
     ):
-        console.print(Panel.fit(
-            "[bold blue]🤖 Agentic MMM System[/bold blue]\n"
-            "[dim]Intelligent Data Analyst & Marketing Mix Modelling Agent[/dim]",
-        ))
+        console.print(
+            "\n[bold blue]🤖 Agentic MMM System[/bold blue]\n"
+            "[dim]Intelligent Data Analyst & Marketing Mix Modelling Agent[/dim]\n"
+        )
 
         self._spark = spark or (_get_spark() if SPARK_AVAILABLE else None)
         if self._spark:
@@ -300,19 +300,16 @@ class NotebookMMM:
         """Start an interactive chat session with the agent."""
         self._ensure_agent()
 
-        console.print(Panel.fit(
-            "[bold green]💬 Interactive MMM Agent Chat[/bold green]\n\n"
-            "[cyan]Try:[/cyan]\n"
-            "  • [white]'profile the data'[/white]\n"
-            "  • [white]'which columns are suitable for MMM?'[/white]\n"
-            "  • [white]'run full MMM analysis'[/white]\n"
-            "  • [white]'optimise my $1M budget'[/white]\n"
-            "  • [white]'create a tool to detect seasonality'[/white]\n"
-            "  • [white]'show me the analysis history'[/white]\n\n"
-            "[yellow]Type 'quit' to exit | 'new' for a new conversation thread[/yellow]",
-            title="Chat Mode",
-            border_style="green",
-        ))
+        console.print(
+            "\n[bold magenta]────────── Chat Mode ──────────[/bold magenta]\n"
+            "🗨️  [bold magenta]Interactive MMM Agent Chat[/bold magenta]\n\n"
+            "[dim]Try:\n"
+            " - 'Show me basic analytics'\n"
+            " - 'Which channels drive the most sales?'\n"
+            " - 'Run an OLS model'\n"
+            "Type 'exit' to quit.[/dim]\n"
+            "[bold magenta]─────────────────────────────────[/bold magenta]\n"
+        )
 
         thread_id = str(uuid.uuid4())
 

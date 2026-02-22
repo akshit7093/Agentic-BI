@@ -81,7 +81,7 @@ def _build_tool_registry(engine: MMMEngine, llm=None) -> ToolRegistry:
 
 def _init_llm(endpoint: str, temperature: float, max_tokens: int):
     """Initialize the Databricks-hosted LLM."""
-    from langchain_databricks import ChatDatabricks
+    from databricks_langchain import ChatDatabricks
 
     return ChatDatabricks(
         endpoint=endpoint,
